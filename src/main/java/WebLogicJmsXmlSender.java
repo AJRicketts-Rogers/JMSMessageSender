@@ -3,6 +3,10 @@
 import javax.naming.Context;
 import javax.naming.InitialContext;
 import javax.naming.NamingException;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.naming.AuthenticationException;
 import javax.naming.CommunicationException;
 import javax.naming.NameNotFoundException;
@@ -70,8 +74,11 @@ public class WebLogicJmsXmlSender {
     
     private static final Semaphore RATE_LIMITER = new Semaphore(MAX_MSGS_PER_SECOND);
 
+    private static final Logger logger =
+            LoggerFactory.getLogger(Generation.class);
+    
     public static void main(String[] args) {
-        System.out.println("[INFO] Starting WebLogic JMS XMLsender...");
+        logger.info("[INFO] Starting WebLogic JMS XMLsender...");
 
         // Basic placeholder sanity checks (fail fast if obvious placeholders not replaced)
         if(containsPlaceholder(WL_PROVIDER_URL) || containsPlaceholder(WL_USERNAME) ||
@@ -83,20 +90,20 @@ public class WebLogicJmsXmlSender {
 
         // If using SSL (t3s), set truststore if provided
         if(WL_PROVIDER_URL.trim().toLowerCase().startsWith("t3s://")) {
+        	
             if (!isBlank(SSL_TRUSTSTORE_PATH)) {
                System.setProperty("javax.net.ssl.trustStore", SSL_TRUSTSTORE_PATH);
-                if(!isBlank(SSL_TRUSTSTORE_PASSWORD)) {
-                    System.setProperty("javax.net.ssl.trustStorePassword",SSL_TRUSTSTORE_PASSWORD);
+               
+               if(!isBlank(SSL_TRUSTSTORE_PASSWORD)) {
+            	   System.setProperty("javax.net.ssl.trustStorePassword",SSL_TRUSTSTORE_PASSWORD);
                 }
-                System.out.println("[INFO] Using provided SSL truststore fort3s.");
+                logger.info("Using provided SSL truststore fort3s.");
+                
             } else {
-                System.out.println("[WARN] t3s detected but no truststore configured.Ensure the default JVM truststore trusts the server certificate.");
+            	logger.warn("t3s detected but no truststore configured.Ensure the default JVM truststore trusts the server certificate.");
             }
         }
         
-//        String orderXML = Generation.generateOrder();
-//        System.out.println(generationObj.prettyFormat(orderXML, 2));
-//        Generation.WriteStringToFile(orderXML);
         InitialContext initialContext = null;
         try {
             // Build JNDI environment
@@ -106,35 +113,34 @@ public class WebLogicJmsXmlSender {
             env.put(Context.SECURITY_PRINCIPAL, WL_USERNAME);
             env.put(Context.SECURITY_CREDENTIALS, WL_PASSWORD);
 
-            System.out.println("[INFO] Connecting to WebLogic JNDI at: " + WL_PROVIDER_URL);
+            logger.info("Connecting to WebLogic JNDI at: " + WL_PROVIDER_URL);
             initialContext = new InitialContext(env);
-            System.out.println("[INFO]JNDI InitialContext created successfully.");
+            logger.info("JNDI InitialContext created successfully.");
 
             // Look up the ConnectionFactory
-            System.out.println("[INFO] Looking up ConnectionFactory: " + CF_JNDI_NAME);
+            logger.info("Looking up ConnectionFactory: " + CF_JNDI_NAME);
             Object cfObj = initialContext.lookup(CF_JNDI_NAME);
             
             if (!(cfObj instanceof ConnectionFactory)) {
-            	System.err.println("[ERROR] JNDI object for " + CF_JNDI_NAME + " is not a javax.jms.ConnectionFactory. Actual type: "
-            			+ cfObj.getClass().getName());
+            	logger.error("[ERROR] JNDI object for {} is not a javax.jms.ConnectionFactory. Actual type: {}", 
+            			CF_JNDI_NAME, cfObj.getClass().getName());
             	System.exit(3);
             }
             
             ConnectionFactory connectionFactory = (ConnectionFactory) cfObj;
-            System.out.println("[INFO] ConnectionFactory lookup successful.");
+            logger.info("ConnectionFactory lookup successful.");
 
             // Look up the Queue
-            System.out.println("[INFO] Looking up Queue: " + QUEUE_JNDI_NAME);
+            logger.info("Looking up Queue: " + QUEUE_JNDI_NAME);
             Object qObj = initialContext.lookup(QUEUE_JNDI_NAME);
             
             if (!(qObj instanceof Queue)) {
-            	System.err.println("[ERROR] JNDI object for " + QUEUE_JNDI_NAME + " is not a javax.jms.Queue.Actual type: " 
-            			+ qObj.getClass().getName());
+            	logger.error("JNDI object for {} is not a javax.jms.Queue.Actual type: {}", QUEUE_JNDI_NAME, qObj.getClass().getName());
             	System.exit(4);
             }
             
             Queue queue = (Queue) qObj;
-            System.out.println("[INFO] Queue lookup successful.");
+            logger.info("Queue lookup successful.");
 
             // Resolve JMScredentials
             final String jmsUser = isPlaceholderOrBlank(JMS_USERNAME) ? WL_USERNAME : JMS_USERNAME;
@@ -144,11 +150,11 @@ public class WebLogicJmsXmlSender {
 
             ScheduledExecutorService rateLimiterScheduler = startRateLimiterRefill();
 
-            System.out.println("[INFO] Starting batch send:");
-            System.out.println("       Total messages: " + TOTAL_MESSAGES);
-            System.out.println("       Batch size:     " + BATCH_SIZE);
-            System.out.println("       Threads:        " + THREAD_COUNT);
-            System.out.println("       Max msg/sec:    " + MAX_MSGS_PER_SECOND);
+            logger.info("Starting batch send:");
+            logger.info("       Total messages: " + TOTAL_MESSAGES);
+            logger.info("       Batch size:     " + BATCH_SIZE);
+            logger.info("       Threads:        " + THREAD_COUNT);
+            logger.info("       Max msg/sec:    " + MAX_MSGS_PER_SECOND);
 
             int remaining = TOTAL_MESSAGES;
             List<String> referenceNumbers = new ArrayList<String>();
@@ -164,7 +170,7 @@ public class WebLogicJmsXmlSender {
                 	referenceNumbers = batchAndRefs.get(1);
                 }
                 else {
-                	System.out.println("ERROR: BATCH AND REFERENCE NUMBERS WERE EMPTY, THROW ERROR");
+                	logger.error("BATCH AND REFERENCE NUMBERS WERE EMPTY, THROW ERROR");
                 }
 
                 for (String xml : batch) {
@@ -180,87 +186,45 @@ public class WebLogicJmsXmlSender {
 
             rateLimiterScheduler.shutdown();
 
-            System.out.println("[INFO] All messages sent");
-            System.out.println("Reference Numbers = " + referenceNumbers);
-            
+            logger.info("All messages sent");
+            logger.info("Reference Numbers = {}", referenceNumbers);
 
-//            // CreateJMSContext with AUTO_ACKNOWLEDGE (per request)
-//            System.out.println("[INFO] Creating JMSContext with AUTO_ACKNOWLEDGE...");
-//            try (JMSContext jmsContext = connectionFactory.createContext(jmsUser,jmsPass,JMSContext.CLIENT_ACKNOWLEDGE)) {
-//            	
-//            	// PrepareXML payload
-//                String xmlPayload = orderXML;
-//                if (isBlank(xmlPayload)) {
-//                	System.err.println("[ERROR] No XML payload provided (both inline andfile path are empty).");
-//                	System.exit(5);
-//                }
-//
-//                // Create and sendmessage
-//                TextMessage message = jmsContext.createTextMessage(xmlPayload);
-//
-//                // Configureproducer
-//                javax.jms.JMSProducer producer = jmsContext.createProducer();
-//                message.setJMSCorrelationID("1034260:905");
-//                
-//                producer.setDeliveryMode(USE_PERSISTENT_DELIVERY ? DeliveryMode.PERSISTENT : DeliveryMode.NON_PERSISTENT);
-//
-//               if (TIME_TO_LIVE_MS > 0) {
-//                    producer.setTimeToLive(TIME_TO_LIVE_MS);
-//                }
-//               if (PRIORITY != Message.DEFAULT_PRIORITY) {
-//                    producer.setPriority(PRIORITY);
-//               }
-//               
-//               System.out.println("[INFO] Sending XML message to queue: " + QUEUE_JNDI_NAME);
-//               producer.send(queue, message);
-//               
-//               // Print assigned message ID if available
-//               
-//               try {
-//            	   String msgId = message.getJMSMessageID();
-//            	   System.out.println("[SUCCESS] Message sent.JMSMessageID: " + msgId);
-//        	   } catch (JMSException jmse) {
-//        		   // Not critical; message wasalready sent
-//        		   System.out.println("[SUCCESS] Message sent. (Could not read JMSMessageID: " +jmse.getMessage() + ")");
-//                }
-//            }
-//
         } catch (AuthenticationException ae) {
-           System.err.println("[AUTH ERROR] Authentication to WebLogic JNDI or JMS failed: " + ae.getMessage());
-           ae.printStackTrace(System.err);
+        	logger.error("[AUTH ERROR] Authentication to WebLogic JNDI or JMS failed: {}", ae.getMessage());
+            ae.printStackTrace(System.err);
             System.exit(11);
         } catch (CommunicationException ce) {
-           System.err.println("[NETWORK ERROR] Could not communicate with WebLogic at " + WL_PROVIDER_URL + ": " +ce.getMessage());
+        	logger.error("[NETWORK ERROR] Could not communicate with WebLogic at {}: {}", WL_PROVIDER_URL, ce.getMessage());
             ce.printStackTrace(System.err);
             System.exit(12);
         } catch(NameNotFoundException nnfe) {
-            System.err.println("[JNDI ERROR] JNDI name not found: " +nnfe.getMessage());
+        	logger.error("[JNDI ERROR] JNDI name not found: {}", nnfe.getMessage());
             nnfe.printStackTrace(System.err);
             System.exit(13);
         } catch(JMSRuntimeException jre) {
-            System.err.println("[JMS ERROR] Runtime error while interacting with JMS: " +jre.getMessage());
+        	logger.error("[JMS ERROR] Runtime error while interacting with JMS: {}", jre.getMessage());
             jre.printStackTrace(System.err);
             System.exit(14);
         } catch(NamingException ne) {
-            System.err.println("[JNDI ERROR] Naming exception: " + ne.getMessage());
-           ne.printStackTrace(System.err);
+        	logger.error("[JNDI ERROR] Naming exception: {}", ne.getMessage());
+            ne.printStackTrace(System.err);
             System.exit(15);
         } catch (Exception e) {
-           System.err.println("[ERROR] Unexpected exception: " + e.getMessage());
+        	logger.error("[ERROR] Unexpected exception: {}", e.getMessage());
             e.printStackTrace(System.err);
-           System.exit(16);
+            System.exit(16);
         } finally {
             // Clean up InitialContext
             if (initialContext != null){
                 try {
                     initialContext.close();
                 } catch (NamingException ne) {
-                   System.err.println("[WARN] Failed to close InitialContext: " + ne.getMessage());
+                	logger.error("[WARN] Failed to close InitialContext: {}", ne.getMessage());
                 }
            }
         }
 
-        System.out.println("[INFO] Program completed.");
+        logger.info("Program completed.");
     }
     
     private static void sendOneMessage(ConnectionFactory connectionFactory, Queue queue, String jmsUser, String jmsPass, String xmlPayload) {
@@ -288,16 +252,15 @@ public class WebLogicJmsXmlSender {
                 
                 try {
                	   String msgId = message.getJMSMessageID();
-               	   System.out.println("[SUCCESS] Sent | Thread = "+ Thread.currentThread().getName()
-               			   + " | MsgID = " + msgId + "\n");
+               	   logger.info("[SUCCESS] Sent | Thread = {} | MsgID = {}\n", Thread.currentThread().getName(), msgId);
            	   } catch (JMSException jmse) {
            		   // Not critical; message was already sent
-           		   System.out.println("[SUCCESS] Message sent. (Could not read JMSMessageID: " +jmse.getMessage() + ")");
+           		   logger.info("[SUCCESS] Message sent. (Could not read JMSMessageID: {})", jmse.getMessage());
            	   }
             }
 
         } catch (Exception e) {
-            System.err.println("[ERROR] Failed to send message: " + e.getMessage());
+            logger.error("Failed to send message: " + e.getMessage());
             e.printStackTrace();
         }
     }
@@ -316,7 +279,7 @@ public class WebLogicJmsXmlSender {
         		batch.add(value);        		
         	}
         	else {
-        		System.out.println("ORDER IS EMPTY, ADD SOME ERROR LOGGING / HANDLING HERE");
+        		logger.info("ORDER IS EMPTY, ADD SOME ERROR LOGGING / HANDLING HERE");
         	}
         }
         
@@ -346,7 +309,7 @@ public class WebLogicJmsXmlSender {
             return inlineXml;
         }
         if (!isBlank(filePath) &&!filePath.startsWith("REPLACE_ME")) {
-            System.out.println("[INFO] Reading XML payload from file: " +filePath);
+        	logger.info("Reading XML payload from file: " +filePath);
             byte[] bytes = Files.readAllBytes(Paths.get(filePath));
             return new String(bytes,StandardCharsets.UTF_8);
         }
