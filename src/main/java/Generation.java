@@ -49,20 +49,29 @@ public class Generation {
 
 //		String orderxml = generateOrder();
 //		WriteStringToFile(orderxml);
-		generateOrder();
+		
+		try {
+			generateOrder("src/main/java/TT_order.xml");
+		} catch (IOException e) {
+			e.printStackTrace();
+		}
 	}
 	
-	public static Map<String, String> generateOrder() {
+	public static Map<String, String> generateOrder(String filePath) throws IOException {
 		DocumentBuilderFactory builder;
 		Document document = null;
 		
 		long startTime = System.nanoTime();
 		Map<String, String> generatedOrder = new HashMap<String, String>();
 		
+		if (filePath.trim().isEmpty()) {
+			throw new IOException("Error: File Path provided was an empty string");
+		}
+		
 		try {
 			builder = DocumentBuilderFactory.newInstance();
 			builder.setNamespaceAware(true);
-			document = builder.newDocumentBuilder().parse(new File("src/main/java/TT_order.xml"));
+			document = builder.newDocumentBuilder().parse(new File(filePath));
 					
 			XPath xpath = getRoot(document);
 			if (xpath == null) {
@@ -219,27 +228,12 @@ public class Generation {
 	        if ("RBTCharacteristics".equals(local) ||
 	            "characteristicValues".equals(local)) {
 
-	            Element nameElement = null, valueElement = null;
-	            NodeList kids = el.getChildNodes();
+	        	RbtPair rbtPair = extractNameValue(el);
 
-	            for (int i = 0; i < kids.getLength(); i++) {
-	                Node childNode = kids.item(i);
-	                
-	                if (childNode.getNodeType() != Node.ELEMENT_NODE) continue;
-
-	                if ("name".equals(childNode.getLocalName())) {
-	                	nameElement = (Element) childNode;
-	                }
-	                else if ("value".equals(childNode.getLocalName())) {
-	                	valueElement = (Element) childNode;
-	                }
-	            }
-
-	            if (nameElement != null && valueElement != null) {
-	                String name = nameElement.getTextContent().trim();
-	                String value = valueElement.getTextContent().trim();
+	            if (rbtPair != null && rbtPair.name != null && rbtPair.value != null) {
+	                String value = rbtPair.value.getTextContent().trim();
 	                if (!value.isEmpty()) {
-	                    ctx.rbtPairs.add(new RbtPair(name, valueElement));
+	                    ctx.rbtPairs.add(rbtPair);
 	                }
 	            }
 	        }
@@ -375,54 +369,73 @@ public class Generation {
 
 	    logger.debug("Number of values changed: {}\n", count);
 	}
-
+	
 	private static void replaceAffectedProducts(DomContext ctx) {
 	    logger.debug("\n========== Affected Product ID Replacement ==========\n");
 
-	    for (Element ap : ctx.affectedProducts) {
-	        Element id = null, apid = null;
+	    ValueIndex apidIndex = new ValueIndex();
 
-	        NodeList kids = ap.getChildNodes();
-	        for (int i = 0; i < kids.getLength(); i++) {
-	            Node childNode = kids.item(i);
+	    // 1. Collect all APID-related elements
+	    for (Element affectedProduct : ctx.affectedProducts) {
+
+	        NodeList children = affectedProduct.getChildNodes();
+	        for (int i = 0; i < children.getLength(); i++) {
+	            Node childNode = children.item(i);
 	            if (childNode.getNodeType() != Node.ELEMENT_NODE) continue;
 
-	            if ("ID".equals(childNode.getLocalName())) id = (Element) childNode;
-	            
-	            if ("characteristicValues".equals(childNode.getLocalName())) {
-	                Element nameElement = null, valueElement = null;
-	                NodeList nestedChildNodes = childNode.getChildNodes();
+	            Element childElement = (Element) childNode;
+	            String localName = childElement.getLocalName();
+
+	            // <affectedProduct><ID>
+	            if ("ID".equals(localName)) {
+	                apidIndex.add(childElement);
+	            }
+
+	            // <characteristicValues>
+	            if ("characteristicValues".equals(localName)) {
+	            	
+	                // Using RbtPair here but childElement is actually a <characteristicValues> element
+	                RbtPair rbtPair = extractNameValue(childElement);
 	                
-	                for (int j = 0; j < nestedChildNodes.getLength(); j++) {
-	                    
-	                	Node nestedChildNode = nestedChildNodes.item(j);
-	                    if (nestedChildNode.getNodeType() != Node.ELEMENT_NODE) continue;
-	                    
-	                    if ("name".equals(nestedChildNode.getLocalName())) {
-	                    	nameElement = (Element) nestedChildNode;
-	                    }
-	                    if ("value".equals(nestedChildNode.getLocalName())) {
-	                    	valueElement = (Element) nestedChildNode;
+	                if (rbtPair != null && rbtPair.name != null && rbtPair.value != null) {
+	                	String nameText = rbtPair.name;
+	                	
+	                    if ("APID".equals(nameText) || "REF_AP_ID".equals(nameText)) {
+	                        apidIndex.add(rbtPair.value);
 	                    }
 	                }
-	                
-	                if (nameElement != null && "APID".equals(nameElement.getTextContent())) {
-	                	apid = valueElement;
+	                else {
+	                	logger.error("Could not extract name value pair from charactersiticValues element");
 	                }
 	            }
 	        }
+	    }
 
-	        if (id != null && apid != null) {
-	            String oldVal = id.getTextContent();
-	            String newVal = String.valueOf(generateRandomLong(oldVal.length()));
+	    Map<String, String> replacements = generateReplacements(apidIndex, false, false);
 
-	            logger.debug("Old Affected Product id: {}", oldVal);
-	            logger.debug("New Affected Product id: {}", newVal);
+	    applyReplacement(apidIndex, replacements, "APID", ctx);
+	}
+	
+	private static RbtPair extractNameValue(Element characteristicValues) {
+	    Element name = null, value = null;
+	    NodeList kids = characteristicValues.getChildNodes();
 
-	            id.setTextContent(newVal);
-	            apid.setTextContent(newVal);
+	    for (int i = 0; i < kids.getLength(); i++) {
+	        Node node = kids.item(i);
+	        if (node.getNodeType() != Node.ELEMENT_NODE) continue;
+
+	        if ("name".equals(node.getLocalName())) {
+	        	name = (Element) node;
+	        }
+	        else if ("value".equals(node.getLocalName())) {
+	        	value = (Element) node;
 	        }
 	    }
+
+	    if (name != null && value != null) {
+	        return new RbtPair(name.getTextContent().trim(), value);
+	    }
+	    return null;
 	}
 	
 	private static void replaceMac(DomContext ctx) {
@@ -447,7 +460,7 @@ public class Generation {
             throw new IllegalArgumentException("Length must be between 1 and 19 for long type.");
         }
         long min = (long) Math.pow(10, length - 1);
-        long max = (long) Math.pow(10, length); // The bound is exclusive, so use 10^length for max
+        long max = (long) Math.pow(10, length);
 
         // nextLong(origin, bound) returns a number between origin (inclusive) and bound (exclusive)
         return ThreadLocalRandom.current().nextLong(min, max);
@@ -515,25 +528,16 @@ public class Generation {
 	    transformer.setOutputProperty(OutputKeys.METHOD, "xml");
 	    transformer.setOutputProperty(OutputKeys.INDENT, "yes");
 	
-	    // This property is required by most Java implementations
-	    transformer.setOutputProperty(
-	        "{http://xml.apache.org/xslt}indent-amount", "4"
-	    );
+	    transformer.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "4");
 	
 	    if (nodeList != null) {
 	    	for (int i=0; i < nodeList.getLength(); i++) {
 	    		Node nodeFromList = nodeList.item(i);
-	    	    transformer.transform(
-	    		        new DOMSource(nodeFromList),
-	    		        new StreamResult(System.out)
-	    		    );
+	    	    transformer.transform(new DOMSource(nodeFromList), new StreamResult(System.out));
 	    	}
 	    }
 	    else if (node != null) {
-		    transformer.transform(
-			        new DOMSource(node),
-			        new StreamResult(System.out)
-			    );
+		    transformer.transform(new DOMSource(node), new StreamResult(System.out));
 	    }
 
 	}

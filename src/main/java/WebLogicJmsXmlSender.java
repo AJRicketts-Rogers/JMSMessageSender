@@ -23,6 +23,7 @@ import javax.jms.DeliveryMode;
 
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Hashtable;
@@ -34,10 +35,12 @@ import java.util.concurrent.*;
 public class WebLogicJmsXmlSender {
 
     // ======REQUIRED PLACEHOLDERS (REPLACE THESE) ======
-    // WebLogic JNDI connection settings
+    
+	// WebLogic JNDI connection settings
 //    private static final String WL_PROVIDER_URL = "t3://vlrenbptosmwl01.rci.rogers.ca:7001"; // e.g., t3://wls-host.example.com:7001 (use t3s:// for SSL)
-    private static final String WL_PROVIDER_URL = "t3://osmqa1-1.ngpp.mgmt.vf.rogers.com:7001,osmqa1-2.ngpp.mgmt.vf.rogers.com:7001"; // e.g., t3://wls-host.example.com:7001 (use t3s:// for SSL)
 //    private static final String WL_PROVIDER_URL = "t3://osmdev1-z1.ngpp.mgmt.vf.rogers.com:7001,osmdev1-z2.ngpp.mgmt.vf.rogers.com:7001"; // e.g., t3://wls-host.example.com:7001 (use t3s:// for SSL)
+	private static final String WL_PROVIDER_URL = "t3://osmqa1-1.ngpp.mgmt.vf.rogers.com:7001,osmqa1-2.ngpp.mgmt.vf.rogers.com:7001"; // e.g., t3://wls-host.example.com:7001 (use t3s:// for SSL)
+    
     private static final String WL_INITIAL_CONTEXT_FACTORY = "weblogic.jndi.WLInitialContextFactory";
     private static final String WL_USERNAME = "admin";
     private static final String WL_PASSWORD = "welcome1";
@@ -51,7 +54,7 @@ public class WebLogicJmsXmlSender {
     private static final String JMS_USERNAME = "admin";
     private static final String JMS_PASSWORD = "welcome1";
 
-    private static final String XML_MESSAGE_FILE_PATH =""; // e.g., /tmp/message.xml
+    private static final String XML_MESSAGE_FILE_PATH ="src/main/java/TT_order.xml"; // e.g., /tmp/message.xml
 
     // Optional: SSL truststore if using t3s(leave empty if not needed)
     private static final String SSL_TRUSTSTORE_PATH = "";     // e.g.,/path/to/truststore.jks
@@ -64,13 +67,13 @@ public class WebLogicJmsXmlSender {
     
     // Concurrency settings/tuning
     private static final int THREAD_COUNT = 5;          // concurrent JMS senders
-    private static final int TOTAL_MESSAGES = 5;    // total messages to send
+    private static final int TOTAL_MESSAGES = 40;    // total messages to send
 
     // Batch generation
-    private static final int BATCH_SIZE = 25;            // orders generated per batch
+    private static final int BATCH_SIZE = 20;            // orders generated per batch
 
     // Rate limiting
-    private static final int MAX_MSGS_PER_SECOND = 50;   // hard throttle
+    private static final int MAX_MSGS_PER_SECOND = 2;   // hard throttle
     
     private static final Semaphore RATE_LIMITER = new Semaphore(MAX_MSGS_PER_SECOND);
 
@@ -167,7 +170,7 @@ public class WebLogicJmsXmlSender {
                 List<List<String>> batchAndRefs = generateOrderBatch(currentBatchSize, referenceNumbers);
                 if (!batchAndRefs.isEmpty()) {
                 	batch = batchAndRefs.get(0);
-                	referenceNumbers = batchAndRefs.get(1);
+                	referenceNumbers.addAll(batchAndRefs.get(1));
                 }
                 else {
                 	logger.error("BATCH AND REFERENCE NUMBERS WERE EMPTY, THROW ERROR");
@@ -176,8 +179,8 @@ public class WebLogicJmsXmlSender {
                 for (String xml : batch) {
                     senderPool.submit(() -> sendOneMessage(connectionFactory, queue, jmsUser, jmsPass, xml));
                 }
-
                 remaining -= currentBatchSize;
+                logger.info("Generating a new batch of orders,  {} orders left", remaining);
             }
 
             // Shutdown cleanly
@@ -209,6 +212,10 @@ public class WebLogicJmsXmlSender {
         	logger.error("[JNDI ERROR] Naming exception: {}", ne.getMessage());
             ne.printStackTrace(System.err);
             System.exit(15);
+        } catch (IOException io) {
+        	logger.error("[IO ERROR] FilePath error, given filepath -> {}, error: {}", XML_MESSAGE_FILE_PATH, io.getMessage());
+        	io.printStackTrace(System.err);
+        	System.exit(15);
         } catch (Exception e) {
         	logger.error("[ERROR] Unexpected exception: {}", e.getMessage());
             e.printStackTrace(System.err);
@@ -265,10 +272,10 @@ public class WebLogicJmsXmlSender {
         }
     }
     
-    private static List<List<String>> generateOrderBatch(int batchSize, List<String> referenceNumbers) {
+    private static List<List<String>> generateOrderBatch(int batchSize, List<String> referenceNumbers) throws IOException {
         List<String> batch = new ArrayList<>(batchSize);
         for (int i = 0; i < batchSize; i++) {
-        	Map<String, String> order = Generation.generateOrder();
+        	Map<String, String> order = Generation.generateOrder(XML_MESSAGE_FILE_PATH);
         	
         	if (!order.isEmpty()) {
         		Map.Entry<String, String> entry = order.entrySet().iterator().next();
@@ -279,7 +286,7 @@ public class WebLogicJmsXmlSender {
         		batch.add(value);        		
         	}
         	else {
-        		logger.info("ORDER IS EMPTY, ADD SOME ERROR LOGGING / HANDLING HERE");
+        		logger.error("ORDER IS EMPTY, ADD SOME ERROR LOGGING / HANDLING HERE");
         	}
         }
         
