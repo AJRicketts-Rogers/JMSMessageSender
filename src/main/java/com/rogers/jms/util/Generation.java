@@ -1,4 +1,4 @@
-//package Success;
+package com.rogers.jms.util;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -6,21 +6,26 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
+
 import java.io.StringReader;
 import java.io.StringWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Random;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
-import java.io.File;
+import java.util.stream.Collectors;
 import java.io.IOException;
+import java.io.InputStream;
 
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.xpath.XPath;
@@ -37,8 +42,26 @@ import javax.xml.transform.stream.StreamSource;
 
 public class Generation {
 	
-    private static final Logger logger =
-            LoggerFactory.getLogger(Generation.class);
+	private static Properties props = ConfigLoader.load();
+    private static final Logger logger = LoggerFactory.getLogger(Generation.class);
+
+	private static final List<String> SAM_KEYS;
+	private static final AtomicInteger SAMKEY_INDEX = new AtomicInteger(0);
+
+	
+	static {
+	    String rawValue = props.getProperty("samkey.values", "");
+	    if (rawValue.isBlank()) {
+	        SAM_KEYS = List.of();
+	    } 
+	    else {
+	        SAM_KEYS = Arrays.stream(rawValue.split(","))
+	                .map(String::trim)
+	                .filter(s -> !s.isEmpty())
+	                .collect(Collectors.toList());
+	    }
+	}
+
 	
 	public static void main(String[] args) {
 
@@ -46,7 +69,9 @@ public class Generation {
 //		WriteStringToFile(orderxml);
 		
 		try {
-			generateOrder("src/main/java/TT_order.xml");
+			generateOrder("/xml/TT_order.xml");
+//			System.out.println(generateOrder("/xml/TT_order.xml").values());
+			
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
@@ -59,14 +84,16 @@ public class Generation {
 		long startTime = System.nanoTime();
 		Map<String, String> generatedOrder = new HashMap<String, String>();
 		
-		if (filePath.trim().isEmpty()) {
-			throw new IOException("Error: File Path provided was an empty string");
+		InputStream xmlStream = WebLogicJmsXmlSender.class.getResourceAsStream(filePath);
+		
+		if (xmlStream == null) {
+		    throw new IOException("TT_order.xml not found on classpath");
 		}
 		
 		try {
 			builder = DocumentBuilderFactory.newInstance();
 			builder.setNamespaceAware(true);
-			document = builder.newDocumentBuilder().parse(new File(filePath));
+			document = builder.newDocumentBuilder().parse(xmlStream);
 					
 			XPath xpath = getRoot(document);
 			if (xpath == null) {
@@ -95,14 +122,13 @@ public class Generation {
 		}			
 		
 		catch (Exception e) {
-			// TODO Auto-generated catch block
 			e.printStackTrace();
 		} finally {
 
 		    long endTime = System.nanoTime();
 		    long durationMillis = (endTime - startTime) / 1_000_000;
 
-		    logger.info("Program completed in {} ms ({} seconds)", durationMillis, durationMillis / 1000.0);
+		    logger.info("Order Generated in {} ms ({} seconds)", durationMillis, durationMillis / 1000.0);
 
 		}
 		return generatedOrder;
@@ -128,12 +154,12 @@ public class Generation {
 				}
 				
 	            public String getPrefix(String namespaceURI) {
-	                // Dummy implementation if not needed for your use case
+	                // Dummy implementation
 	                return null; 
 	            }
 
 	            public Iterator<String> getPrefixes(String namespaceURI) {
-	                // Dummy implementation if not needed for your use case
+	                // Dummy implementation
 	                return null;
 	            }
 			});
@@ -142,7 +168,6 @@ public class Generation {
 		}
 			
 		catch (Exception e) {
-			// TODO Auto-generated catch block
 			e.printStackTrace();
 		}
 		
@@ -280,6 +305,11 @@ public class Generation {
 	        String newVal = replacements.get(oldVal);
 	        int count = entry.getValue().size();
 
+	        if (label.equals("OrderID")) {
+	        	newVal = newVal + "-" + props.getProperty("testPrefix");
+	        	ctx.referenceNumber = newVal;
+	        }
+
 	        logger.debug("Old {} value: {}", label, oldVal);
 	        logger.debug("New {} value: {}", label, newVal);
 	        logger.debug("Number of values changed: {}\n", count);
@@ -289,9 +319,6 @@ public class Generation {
 	            totalReplaced++;
 	        }
 	        
-	        if (label.equals("OrderID")) {
-	        	ctx.referenceNumber = newVal;
-	        }
 	    }
 
 	    return totalReplaced;
@@ -308,7 +335,11 @@ public class Generation {
 
 	    Map<String, String> repl = null;
 	    
-	    if ("HHID".equals(name)) {
+
+	    if ("SamKey".equals(name)) {
+	        repl = generateSamKeyReplacement(index);
+	    }
+	    else if ("HHID".equals(name)) {
 	    	repl = generateReplacements(index, false, true);
 	    }
 	    else {
@@ -316,6 +347,28 @@ public class Generation {
 	    }
 	    applyReplacement(index, repl, name, ctx);
 	}
+	
+	private static Map<String, String> generateSamKeyReplacement(ValueIndex index) {
+
+	    // Fallback to existing random logic if none configured
+	    if (SAM_KEYS.isEmpty()) {
+	    	logger.debug(System.lineSeparator());
+	    	logger.debug("samkey.values is empty in loadtest.properties, generating a random samkey.");
+	    	logger.debug("Add a comma seperated list of valid samkeys for the current test environment "
+	    			+ "if needed, example: samkey.values = SAMKEY001,SAMKEY002,...\n");
+	        return generateReplacements(index, false, false);
+	    }
+
+	    String originalSamkey = index.byValue.keySet().iterator().next();
+
+	    // Round robin through configured values
+	    String newSamKey = SAM_KEYS.get(Math.abs(SAMKEY_INDEX.getAndIncrement() % SAM_KEYS.size()));
+
+	    Map<String, String> repl = new HashMap<>();
+	    repl.put(originalSamkey, newSamKey);
+	    return repl;
+	}
+
 	
 	private static void replaceCBP(DomContext ctx, Node root) {
 	    ValueIndex index = new ValueIndex();
