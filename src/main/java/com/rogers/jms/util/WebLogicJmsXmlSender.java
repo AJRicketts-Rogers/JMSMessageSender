@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.Hashtable;
 import java.util.List;
@@ -47,7 +48,6 @@ public class WebLogicJmsXmlSender {
    // JNDI names
     private static final String CF_JNDI_NAME = "mslv/oms/oms1/internal/jms/ConnectionFactory";     // e.g.,jms/MyCustomConnectionFactory
     public static final String QUEUE_JNDI_NAME = "jms/OMS.NGPP.REQ.Q";
-    private static final String XML_MESSAGE_FILE_PATH = "/xml/TT_order.xml";
 
     // Optional: SSL Trust Store if using t3s (leave empty if not needed)
     private static final String SSL_TRUSTSTORE_PATH = "";     // e.g.,/path/to/truststore.jks
@@ -58,8 +58,35 @@ public class WebLogicJmsXmlSender {
     private static final int TOTAL_MESSAGES = 1;    // total messages to send
     private static final int BATCH_SIZE = 1;            // orders generated per batch
     private static final int MAX_MSGS_PER_SECOND = 2;   // hard throttle
+    private static final int BATCH_WAIT_TIME_MS = 5000;
 
     private static final Logger logger = LoggerFactory.getLogger(LoadTest.class);
+    private static String XML_MESSAGE_FILE_PATHS;
+    
+    private static final List<OrderTemplate> ORDER_XML_TEMPLATES;
+
+	static {
+	    String raw = props.getProperty("order.xml.paths", "").trim();
+	    if (raw.isEmpty()) {
+	        throw new IllegalStateException("order.xml.paths is not configured");
+	    }
+	    
+	    XML_MESSAGE_FILE_PATHS = raw;
+
+	    ORDER_XML_TEMPLATES = Arrays.stream(raw.split(","))
+	        .map(String::trim)
+	        .map(path -> {
+	            if (path.contains("1p.xml"))
+	                return new OrderTemplate(loadXml(path), "1p");
+	            if (path.contains("2p.xml"))
+	                return new OrderTemplate(loadXml(path), "2p");
+	            if (path.contains("3p.xml"))
+	                return new OrderTemplate(loadXml(path), "3p");
+
+	            throw new IllegalStateException("Unknown SOMR XML: " + path);
+	        })
+	        .toList();
+	}
     
     public static void main(String[] args) {
     	
@@ -68,30 +95,30 @@ public class WebLogicJmsXmlSender {
     		logger.error("jmsResources returned as null, check log output");
     		System.exit(3);
     	}
-    	SendSOMRMessages(jmsResources, TOTAL_MESSAGES, BATCH_SIZE, THREAD_COUNT, MAX_MSGS_PER_SECOND);
+    	SendSOMRMessages(jmsResources, TOTAL_MESSAGES, BATCH_SIZE, THREAD_COUNT, MAX_MSGS_PER_SECOND, BATCH_WAIT_TIME_MS, "2p");
         logger.info("Program completed.");
         
-		final LoadTestDTV lt = new LoadTestDTV(props);
-		
-        String username = props.getProperty("username");
-        String password = props.getProperty("password");
-		
-		final MessageSender msgSender = new MessageSender(username, password);
-		msgSender.init(MessageSender.EAI_REQ_QUEUE);
-
-		Date startDate = new Date();
-		System.out.println("\nStart time : " + startDate + "\n");
-		long startTime = System.nanoTime();
-
-		lt.sendMessages(msgSender);
-
-		long endTime = System.nanoTime();
-		long elapsedTime = endTime - startTime;
-		double seconds = (double)elapsedTime / 1000000000.0;
-
-		System.out.println("\nStart time : " + startDate);
-		System.out.println("\n  End time : " + new Date());		
-		System.out.println("\nAll messages sent in : " + seconds + " seconds");	
+//		final LoadTestDTV lt = new LoadTestDTV(props);
+//		
+//        String username = props.getProperty("username");
+//        String password = props.getProperty("password");
+//		
+//		final MessageSender msgSender = new MessageSender(username, password);
+//		msgSender.init(MessageSender.EAI_REQ_QUEUE);
+//
+//		Date startDate = new Date();
+//		System.out.println("\nStart time : " + startDate + "\n");
+//		long startTime = System.nanoTime();
+//
+//		lt.sendMessages(msgSender);
+//
+//		long endTime = System.nanoTime();
+//		long elapsedTime = endTime - startTime;
+//		double seconds = (double)elapsedTime / 1000000000.0;
+//
+//		System.out.println("\nStart time : " + startDate);
+//		System.out.println("\n  End time : " + new Date());		
+//		System.out.println("\nAll messages sent in : " + seconds + " seconds");	
     }
     
     private static Hashtable<String, String> buildJNDIEnv() {
@@ -150,19 +177,14 @@ public class WebLogicJmsXmlSender {
 		return null;
     }
     
-    public static void SendSOMRMessages(JmsResources jmsResources, int total_messages, int batch_size, int thread_count, int max_msgs_per_second) {
-    	final Semaphore rate_limiter = new Semaphore(max_msgs_per_second);
+    public static void SendSOMRMessages(JmsResources jmsResources, int total_messages, int batch_size, int thread_count, 
+    		int max_msgs_per_second, int batchWaitTimeMs, String orderType) {
+    	final Semaphore rate_limiter = new Semaphore(0, true);
     	try {
             
-            ExecutorService senderPool = Executors.newFixedThreadPool(THREAD_COUNT);
+            ExecutorService senderPool = Executors.newFixedThreadPool(thread_count);
 
-            ScheduledExecutorService rateLimiterScheduler = startRateLimiterRefill(rate_limiter);
-
-            logger.info("Starting SOMR Message Send:");
-            logger.info("       Total messages: {}", total_messages);
-            logger.info("       Batch size:     {}", batch_size);
-            logger.info("       Threads:        {}", thread_count);
-            logger.info("       Max msg/sec:    {}\n", max_msgs_per_second);
+            ScheduledExecutorService rateLimiterScheduler = startRateLimiterRefill(rate_limiter, max_msgs_per_second);
 
             int remaining = total_messages;
             List<String> referenceNumbers = new ArrayList<String>();
@@ -170,9 +192,21 @@ public class WebLogicJmsXmlSender {
             while (remaining > 0) {
                 int currentBatchSize = Math.min(batch_size, remaining);
                 List<String> batch = null;
+                
+                long available = Generation.remainingSamKeyCbpCapacity();
+
+                if (available <= 0) {
+                    logger.warn("No SamKey/CBP combinations remaining. Stopping order generation early.");
+                    break;
+                }
+
+                if (available < currentBatchSize) {
+                    logger.warn("Reducing batch size from {} to {} due to SamKey/CBP exhaustion.", currentBatchSize, available);
+                    currentBatchSize = (int) available;
+                }
 
                 // Batch generation
-                List<List<String>> batchAndRefs = generateOrderBatch(currentBatchSize);
+                List<List<String>> batchAndRefs = generateOrderBatch(currentBatchSize, orderType);
                 if (!batchAndRefs.isEmpty()) {
                 	batch = batchAndRefs.get(0);
                 	referenceNumbers.addAll(batchAndRefs.get(1));
@@ -182,15 +216,21 @@ public class WebLogicJmsXmlSender {
                 }
 
                 for (String xml : batch) {
+                	rate_limiter.acquire();
                     senderPool.submit(() -> sendOneMessage(jmsResources, xml, 5, null));
                 }
+                
                 remaining -= currentBatchSize;
-                if (remaining == 0) {
-                	logger.debug("\n{} Orders left to generate!\n", remaining);                	
+
+                if (batchWaitTimeMs > 0 && remaining > 0) {
+                    try {
+                        Thread.sleep(batchWaitTimeMs);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
                 }
-                else {                	
-                	logger.debug("\nGenerating a new batch of orders,  {} orders left\n", remaining);
-                }
+
             }
 
             // Shutdown cleanly
@@ -199,11 +239,11 @@ public class WebLogicJmsXmlSender {
 
             rateLimiterScheduler.shutdown();
 
-            logger.info("Reference Numbers = {}", referenceNumbers);
-            logger.info("All messages sent" +  System.lineSeparator());
+            logger.info(orderType.toUpperCase() + " Reference Numbers = {}", referenceNumbers);
+            logger.info("All "+ orderType.toUpperCase() + " messages sent" +  System.lineSeparator());
 
         }  catch (IOException io) {
-        	logger.error("[IO ERROR] FilePath error, given filepath -> {}, error: {}", XML_MESSAGE_FILE_PATH, io.getMessage());
+        	logger.error("[IO ERROR] FilePath error, given filepath -> {}, error: {}", XML_MESSAGE_FILE_PATHS, io.getMessage());
         	io.printStackTrace(System.err);
         	System.exit(15);
         } catch (InterruptedException e) {
@@ -241,11 +281,13 @@ public class WebLogicJmsXmlSender {
         }
 	}
     
-    private static List<List<String>> generateOrderBatch(int batchSize) throws IOException {
+    private static List<List<String>> generateOrderBatch(int batchSize, String orderType) throws IOException {
         List<String> batch = new ArrayList<>(batchSize);
         List<String> referenceNumbers = new ArrayList<String>();
         for (int i = 0; i < batchSize; i++) {
-        	Map<String, String> order = Generation.generateOrder(XML_MESSAGE_FILE_PATH);
+        	OrderTemplate tpl = getTemplateForType(orderType);
+        	Map<String, String> order = Generation.generateOrder(tpl.xml, tpl.is3p);
+
         	
         	if (!order.isEmpty()) {
         		Map.Entry<String, String> entry = order.entrySet().iterator().next();
@@ -267,27 +309,43 @@ public class WebLogicJmsXmlSender {
         return ret;
     }
     
-    private static ScheduledExecutorService startRateLimiterRefill(Semaphore rate_limiter) {
+    private static ScheduledExecutorService startRateLimiterRefill(Semaphore rateLimiter, int maxMsgsPerSecond) {
+
         ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
 
         scheduler.scheduleAtFixedRate(() -> {
-            int missingPermits = MAX_MSGS_PER_SECOND - rate_limiter.availablePermits();
-            
-            if (missingPermits > 0) {
-            	rate_limiter.release(missingPermits);
-            }
-        }, 0, 1, TimeUnit.SECONDS); // Run refill every 1 second, missing permits will be restored.
+            rateLimiter.drainPermits();
+            rateLimiter.release(maxMsgsPerSecond);
+        }, 0, 1, TimeUnit.SECONDS);
 
         return scheduler;
     }
     
+    public static class OrderTemplate {
+        final String xml;
+        final String type;      // "1p", "2p", "3p"
+        final boolean is3p;
 
+        OrderTemplate(String xml, String type) {
+            this.xml = xml;
+            this.type = type;
+            this.is3p = "3p".equals(type);
+        }
+    }
+    
+    public static OrderTemplate getTemplateForType(String type) {
+        return ORDER_XML_TEMPLATES.stream()
+            .filter(t -> t.type.equals(type))
+            .findFirst()
+            .orElseThrow(() ->
+                new IllegalStateException("No XML template found for type " + type)
+            );
+    }
+    
     public static String loadXml(String path) {
         try (InputStream is = openStream(path)) {
             if (is == null) {
-                throw new IllegalArgumentException(
-                    "XML not found for path: " + path
-                );
+                throw new IllegalArgumentException("XML not found for path: " + path);
             }
             return new String(is.readAllBytes(), StandardCharsets.UTF_8);
         } catch (IOException e) {

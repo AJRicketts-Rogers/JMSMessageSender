@@ -16,6 +16,9 @@ import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.stream.StreamResult;
 import javax.xml.transform.stream.StreamSource;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.rogers.jms.util.ConfigLoader;
 import com.rogers.jms.util.MessageSender;
 
@@ -27,6 +30,7 @@ public class LoadTestVOD {
 	private long sleepInterval;
 	private int priority;
 	private static final String XSL_PATH = "/xsl/SubmitOrderVOD.xsl";
+    private static final Logger logger = LoggerFactory.getLogger(LoadTest.class);
 	
 	public LoadTestVOD(Properties props) {
 	    this.totalMessages = Integer.parseInt(props.getProperty("vod.totalMessages"));
@@ -106,20 +110,20 @@ public class LoadTestVOD {
 		SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss:SSS");
 		try {
 			for(int index = 1; index <= totalMessages; index++) {
-				String corrId = "VOD-" + testPrefix + String.format("%06d", index);
+				String corrId = testPrefix + "-VOD-" + String.format("%06d", index);
 				String customer = "C" + index;
 				String macAddress = "DEVICE" + index;
 				String eventDate = sdf.format(new Date());
 				String action = "ADDSTB";	//Use this for DTVOrder (VOD)
 				String message = getCreateOrder(corrId, eventDate, action, customer, macAddress, priority, msgSender.getUsername(), msgSender.getPassword());
-				System.out.println("[VOD] Sending order" + index);
+				logger.debug("[VOD] Sending order" + index);
 				msgSender.send(message, priority, corrId);
 				if(index % msgPerSecond == 0 && index < totalMessages) {
 					try {
-						System.out.println("Sleeping " + (sleepInterval/1000) + " sec");
+						logger.debug("Sleeping " + (sleepInterval/1000) + " sec");
 						Thread.sleep(sleepInterval);
 					} catch (InterruptedException e) {
-						System.err.println(e.getMessage());
+						logger.error(e.getMessage());
 					}
 				}
 			}

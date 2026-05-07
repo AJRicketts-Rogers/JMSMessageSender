@@ -26,7 +26,6 @@ public class MessageSender
 	public final static String OSM_QUEUE = "oracle/communications/ordermanagement/WebServiceQueue";
 	public final static String EAI_REQ_QUEUE = "jms/EAI.OSM.REQ.Q";
 	public final static String OMS_REQ_QUEUE = "jms/OMS.NGPP.REQ.Q";
-	public final static String ASMS_REQ_QUEUE = "jms/ASMS.OSM.REQ.Q";
 	
     private static final Logger logger = LoggerFactory.getLogger(Generation.class);
 

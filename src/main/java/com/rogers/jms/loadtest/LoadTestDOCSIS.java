@@ -15,6 +15,9 @@ import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.stream.StreamResult;
 import javax.xml.transform.stream.StreamSource;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.rogers.jms.util.ConfigLoader;
 import com.rogers.jms.util.MessageSender;
 
@@ -26,6 +29,7 @@ public class LoadTestDOCSIS {
 	private long sleepInterval;
 	private int priority;
 	private static final String XSL_PATH = "/xsl/SubmitOrderDOCSIS.xsl";
+    private static final Logger logger = LoggerFactory.getLogger(LoadTest.class);
 	
 	public LoadTestDOCSIS(Properties props) {
 	    this.totalMessages = Integer.parseInt(props.getProperty("docsis.totalMessages"));
@@ -107,21 +111,21 @@ public class LoadTestDOCSIS {
 		SimpleDateFormat canFormat = new SimpleDateFormat("MMddHHmmssSS");
 		try {
 			for(int index = 1; index <= totalMessages; index++) {
-				String corrId = "DOCSIS-" + testPrefix + String.format("%06d", index);
+				String corrId = testPrefix + "-DOCSIS-" + String.format("%06d", index);
 				String canId = canFormat.format(new Date());
 				//String customer = String.format("%012d", index);
 				String macAddress = "000000000000";
 				String eventDate = sdf.format(new Date());
 				String action = "ADDSTBECM";
 				String message = getCreateOrder(corrId, eventDate, action, canId, macAddress, priority, msgSender.getUsername(), msgSender.getPassword());
-				System.out.println("[DOCSIS] Sending order " + index);
+				logger.debug("[DOCSIS] Sending order " + index);
 				msgSender.send(message, priority, corrId);
 				if(index % msgPerSecond == 0 && index < totalMessages) {
 					try {
-						System.out.println("Sleeping " + (sleepInterval/1000) + " sec");
+						logger.debug("Sleeping " + (sleepInterval/1000) + " sec");
 						Thread.sleep(sleepInterval);
 					} catch (InterruptedException e) {
-						System.err.println(e.getMessage());
+						logger.error(e.getMessage());
 					}
 				}
 			}

@@ -20,9 +20,6 @@ public class LoadTest {
 		//Legacy DTV
 		int totalMessagesDTV = Integer.parseInt(props.getProperty("dtv.totalMessages"));
 		
-		//Legacy VOD
-		int totalMessagesVOD = Integer.parseInt(props.getProperty("vod.totalMessages"));
-		
 		//Legacy RHPC
 		int totalMessagesRHPC = Integer.parseInt(props.getProperty("rhpc.totalMessages"));
 
@@ -30,26 +27,30 @@ public class LoadTest {
 		int totalMessagesSSHSI = Integer.parseInt(props.getProperty("sshsi.totalMessages"));
 		
 		//Legacy DOCSIS
-		int totalMessagesDOCSIS = Integer.parseInt(props.getProperty("docsis.totalMessages"));
-		
-		//Maestro Email
-		int totalMessagesEmail = Integer.parseInt(props.getProperty("email.totalMessages"));
+		int totalMessagesDOCSIS = Integer.parseInt(props.getProperty("docsis.totalMessages"));	
 
-		//Maestro GW (Equipment)
-		int totalMessagesGW = Integer.parseInt(props.getProperty("gw.totalMessages"));
-		
-		//Maestro HSI
-		int totalMessagesHSI = Integer.parseInt(props.getProperty("hsi.totalMessages"));
-		
-		//Maestro IPTV
-		int totalMessagesIPTV = Integer.parseInt(props.getProperty("iptv.totalMessages"));		
+		// SOMR 1P ORDERS
+		int TotalMessages1p = Integer.parseInt(props.getProperty("somr.1p.total_messages"));
+		int BatchSize1p = Integer.parseInt(props.getProperty("somr.1p.batch_size"));
+		int BatchWaitTimeMs1p = Integer.parseInt(props.getProperty("somr.1p.batch_wait_time_ms"));
+		int ThreadCount1p = Integer.parseInt(props.getProperty("somr.1p.thread_count"));
+		int MaxMsgsPerSecond1p = Integer.parseInt(props.getProperty("somr.1p.max_msgs_per_second"));
 
-		//SOMR ORDERS
-		int total_messages = Integer.parseInt(props.getProperty("somr.total_messages"));
-		int batch_size = Integer.parseInt(props.getProperty("somr.batch_size"));
-		int thread_count = Integer.parseInt(props.getProperty("somr.thread_count"));
-		int max_msgs_per_second = Integer.parseInt(props.getProperty("somr.max_msgs_per_second"));
-	
+		// SOMR 2P ORDERS
+		int TotalMessages2p = Integer.parseInt(props.getProperty("somr.2p.total_messages"));
+		int BatchSize2p = Integer.parseInt(props.getProperty("somr.2p.batch_size"));
+		int BatchWaitTimeMs2p = Integer.parseInt(props.getProperty("somr.2p.batch_wait_time_ms"));
+		int ThreadCount2p = Integer.parseInt(props.getProperty("somr.2p.thread_count"));
+		int MaxMsgsPerSecond2p = Integer.parseInt(props.getProperty("somr.2p.max_msgs_per_second"));
+
+		// SOMR 3P ORDERS
+
+		int TotalMessages3p = Integer.parseInt(props.getProperty("somr.3p.total_messages"));
+		int BatchSize3p = Integer.parseInt(props.getProperty("somr.3p.batch_size"));
+		int BatchWaitTimeMs3p = Integer.parseInt(props.getProperty("somr.3p.batch_wait_time_ms"));
+		int ThreadCount3p = Integer.parseInt(props.getProperty("somr.3p.thread_count"));
+		int MaxMsgsPerSecond3p = Integer.parseInt(props.getProperty("somr.3p.max_msgs_per_second"));
+		
         String username = props.getProperty("username");
         String password = props.getProperty("password");
         
@@ -73,25 +74,8 @@ public class LoadTest {
 		    });
 		}
 
-        // -------------------- VOD --------------------
-		Thread t2 = null;
-
-		if (totalMessagesVOD > 0) {
-		    final LoadTestVOD loadTestVOD = new LoadTestVOD(props);
-
-		    final MessageSender senderVOD = new MessageSender(username, password);
-		    senderVOD.init(MessageSender.EAI_REQ_QUEUE);
-
-		    t2 = new Thread(new Runnable() {
-		        @Override
-		        public void run() {
-		        	loadTestVOD.sendMessages(senderVOD);
-		        }
-		    });
-		}
-
         // -------------------- RHPC --------------------
-		Thread t3 = null;
+		Thread t2 = null;
 
 		if (totalMessagesRHPC > 0) {
 		    final LoadTestRHPC loadTestRHPC = new LoadTestRHPC(props);
@@ -99,7 +83,7 @@ public class LoadTest {
 		    final MessageSender senderRHPC = new MessageSender(username, password);
 		    senderRHPC.init(MessageSender.EAI_REQ_QUEUE);
 
-		    t3 = new Thread(new Runnable() {
+		    t2 = new Thread(new Runnable() {
 		        @Override
 		        public void run() {
 		        	loadTestRHPC.sendMessages(senderRHPC);
@@ -108,7 +92,7 @@ public class LoadTest {
 		}
 
         // -------------------- SSHSI --------------------
-		Thread t4 = null;
+		Thread t3 = null;
 
 		if (totalMessagesSSHSI > 0) {
 		    final LoadTestSSHSI loadTestSSHSI = new LoadTestSSHSI(props);
@@ -116,7 +100,7 @@ public class LoadTest {
 		    final MessageSender senderSSHSI = new MessageSender(username, password);
 		    senderSSHSI.init(MessageSender.EAI_REQ_QUEUE);
 
-		    t4 = new Thread(new Runnable() {
+		    t3 = new Thread(new Runnable() {
 		        @Override
 		        public void run() {
 		        	loadTestSSHSI.sendMessages(senderSSHSI);
@@ -125,7 +109,7 @@ public class LoadTest {
 		}
 
         // -------------------- DOCSIS --------------------
-		Thread t5 = null;
+		Thread t4 = null;
 
 		if (totalMessagesDOCSIS > 0) {
 		    final LoadTestDOCSIS loadTestDOCSIS = new LoadTestDOCSIS(props);
@@ -133,98 +117,81 @@ public class LoadTest {
 		    final MessageSender senderDOCSIS = new MessageSender(username, password);
 		    senderDOCSIS.init(MessageSender.EAI_REQ_QUEUE);
 
-		    t5 = new Thread(new Runnable() {
+		    t4 = new Thread(new Runnable() {
 		        @Override
 		        public void run() {
 		        	loadTestDOCSIS.sendMessages(senderDOCSIS);
 		        }
 		    });
 		}
-
-        // -------------------- EMAIL --------------------
-		Thread t6 = null;
-
-		if (totalMessagesEmail > 0) {
-			final LoadTestEmail loadTestEmail = new LoadTestEmail(props);
-		    
-			final MessageSender senderEmail = new MessageSender(username, password);
-		    senderEmail.init(MessageSender.ASMS_REQ_QUEUE);
-
-
-		    t6 = new Thread(new Runnable() {
-		        @Override
-		        public void run() {
-		        	loadTestEmail.sendMessages(senderEmail);
-		        }
-		    });
-		}
-                
-		// -------------------- GW --------------------
-		Thread t7 = null;
-
-		if (totalMessagesGW > 0 && totalMessagesHSI == 0) {
-			final LoadTestGW loadTestGW = new LoadTestGW(props);
-			
-			final MessageSender senderGW = new MessageSender(username, password);
-			senderGW.init(MessageSender.ASMS_REQ_QUEUE);
-
-		    t7 = new Thread(new Runnable() {
-		        @Override
-		        public void run() {
-		        	loadTestGW.sendMessages(senderGW);
-		        }
-		    });
-		}
 		
-		// -------------------- HSI --------------------
-		Thread t8 = null;
+		// -------------------- 1P ORDERS --------------------
+		Thread t5 = null;
 
-		if (totalMessagesHSI > 0 && totalMessagesGW == 0) {
-			final LoadTestHSI HSIloadTestHSI = new LoadTestHSI(props);
-			
-			final MessageSender senderHSI = new MessageSender(username, password);
-			senderHSI.init(MessageSender.ASMS_REQ_QUEUE);
-
-		    t8 = new Thread(new Runnable() {
-		        @Override
-		        public void run() {
-		        	HSIloadTestHSI.sendMessages(senderHSI);
-		        }
-		    });
-		}
-		
-		// -------------------- IPTV --------------------
-//		LoadTestIPTV loadTestIPTV = null;
-		Thread t9 = null;
-
-		if (totalMessagesIPTV > 0) {
-		    final LoadTestIPTV loadTestIPTV = new LoadTestIPTV(props);
-		    
-		    final MessageSender senderIPTV = new MessageSender(username, password);
-		    senderIPTV.init(MessageSender.ASMS_REQ_QUEUE);
-
-		    t9 = new Thread(new Runnable() {
-		        @Override
-		        public void run() {
-		        	loadTestIPTV.sendMessages(senderIPTV);
-		        }
-		    });
-		}
-		
-		// -------------------- SOMR ORDERS --------------------
-		Thread t10 = null;
-
-		if (total_messages > 0) {
+		if (TotalMessages1p > 0) {
 			final MessageSender newSender = new MessageSender(username, password);
 		    newSender.init(MessageSender.OMS_REQ_QUEUE);
+		    
+            logger.debug("Starting 1P SOMR Message Send:");
+            logger.debug("       Total messages: {}", TotalMessages1p);
+            logger.debug("       Batch size:     {}", BatchSize1p);
+            logger.debug("       Batch wait(ms): {}", BatchWaitTimeMs1p);
+            logger.debug("       Threads:        {}", ThreadCount1p);
+            logger.debug("       Max msg/sec:    {}\n", MaxMsgsPerSecond1p);
 
-		    t10 = new Thread(new Runnable() {
+		    t5 = new Thread(new Runnable() {
 		        @Override
-		        public void run() {
-		            WebLogicJmsXmlSender.SendSOMRMessages(newSender.getJmsResources(), total_messages, batch_size, thread_count, 
-		            		max_msgs_per_second);
+		        public void run() {		        	
+		            WebLogicJmsXmlSender.SendSOMRMessages(newSender.getJmsResources(), TotalMessages1p, BatchSize1p, ThreadCount1p, 
+		            		MaxMsgsPerSecond1p, BatchWaitTimeMs1p, "1p");
 		        }
 		    });
+		}	
+		
+		// -------------------- 2P ORDERS --------------------
+		Thread t6 = null;
+		
+		if (TotalMessages2p > 0) {
+			final MessageSender newSender = new MessageSender(username, password);
+			newSender.init(MessageSender.OMS_REQ_QUEUE);
+
+            logger.debug("Starting 2P SOMR Message Send:");
+            logger.debug("       Total messages: {}", TotalMessages2p);
+            logger.debug("       Batch size:     {}", BatchSize2p);
+            logger.debug("       Batch wait(ms): {}", BatchWaitTimeMs2p);
+            logger.debug("       Threads:        {}", ThreadCount2p);
+            logger.debug("       Max msg/sec:    {}\n", MaxMsgsPerSecond2p);
+			
+			t6 = new Thread(new Runnable() {
+				@Override
+				public void run() {
+					WebLogicJmsXmlSender.SendSOMRMessages(newSender.getJmsResources(), TotalMessages2p, BatchSize2p, ThreadCount2p, 
+							MaxMsgsPerSecond2p, BatchWaitTimeMs2p, "2p");
+				}
+			});
+		}	
+		
+		// -------------------- 3P ORDERS --------------------
+		Thread t7 = null;
+		
+		if (TotalMessages3p > 0) {
+			final MessageSender newSender = new MessageSender(username, password);
+			newSender.init(MessageSender.OMS_REQ_QUEUE);
+			
+            logger.info("Starting 3P SOMR Message Send:");
+            logger.debug("       Total messages: {}", TotalMessages3p);
+            logger.debug("       Batch size:     {}", BatchSize3p);
+            logger.debug("       Batch wait(ms): {}", BatchWaitTimeMs3p);
+            logger.debug("       Threads:        {}", ThreadCount3p);
+            logger.debug("       Max msg/sec:    {}\n", MaxMsgsPerSecond3p);
+			
+			t7 = new Thread(new Runnable() {
+				@Override
+				public void run() {
+					WebLogicJmsXmlSender.SendSOMRMessages(newSender.getJmsResources(), TotalMessages3p, BatchSize3p, ThreadCount3p, 
+							MaxMsgsPerSecond3p, BatchWaitTimeMs3p, "3p");
+				}
+			});
 		}	
 		
 		if (t1 != null) t1.start();
@@ -234,9 +201,6 @@ public class LoadTest {
 		if (t5 != null) t5.start();
 		if (t6 != null) t6.start();
 		if (t7 != null) t7.start();
-		if (t8 != null) t8.start();
-		if (t9 != null) t9.start();
-		if (t10 != null) t10.start();
 		
 		try {
 		    if (t1 != null) t1.join();
@@ -246,9 +210,6 @@ public class LoadTest {
 		    if (t5 != null) t5.join();
 		    if (t6 != null) t6.join();
 		    if (t7 != null) t7.join();
-		    if (t8 != null) t8.join();
-		    if (t9 != null) t9.join();
-		    if (t10 != null) t10.join();
 		} catch (InterruptedException e) {
 		    e.printStackTrace();
 		}
@@ -259,7 +220,7 @@ public class LoadTest {
 
 		logger.info("Start time : " + startDate);
 		logger.info("End time : " + new Date());		
-		logger.info("\tAll messages sent in : " + seconds + " seconds");		
+		logger.info("All messages sent in : " + seconds + " seconds" + System.lineSeparator() + System.lineSeparator());		
 	}
 
 }

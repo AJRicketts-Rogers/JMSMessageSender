@@ -15,6 +15,9 @@ import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.stream.StreamResult;
 import javax.xml.transform.stream.StreamSource;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.rogers.jms.util.ConfigLoader;
 import com.rogers.jms.util.MessageSender;
 
@@ -26,6 +29,7 @@ public class LoadTestRHPC {
 	private long sleepInterval;
 	private int priority;
 	private static final String XSL_PATH = "/xsl/1-BindEMTA.xsl";
+    private static final Logger logger = LoggerFactory.getLogger(LoadTest.class);
 	
 	public LoadTestRHPC(Properties props) {
 	    this.totalMessages = Integer.parseInt(props.getProperty("rhpc.totalMessages"));
@@ -105,19 +109,19 @@ public class LoadTestRHPC {
 		SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss:SSS");
 		try {
 			for(int index = 1; index <= totalMessages; index++) {
-				String corrId = "RHPC-" + testPrefix + String.format("%06d", index);
+				String corrId = testPrefix + "-RHPC-" + String.format("%06d", index);
 				String customer = "C" + index;
 				String macAddress = "DEVICE" + index;
 				String eventDate = sdf.format(new Date());
 				String message = getCreateOrder(corrId, eventDate, customer, macAddress, priority, msgSender.getUsername(), msgSender.getPassword());
-				System.out.println("[RHPC] Sending order " + index);
+				logger.debug("[RHPC] Sending order " + index);
 				msgSender.send(message, priority, corrId);
 				if(index % msgPerSecond == 0 && index < totalMessages) {
 					try {
-						System.out.println("Sleeping " + (sleepInterval/1000) + " sec");
+						logger.debug("Sleeping " + (sleepInterval/1000) + " sec");
 						Thread.sleep(sleepInterval);
 					} catch (InterruptedException e) {
-						System.err.println(e.getMessage());
+						logger.error(e.getMessage());
 					}
 				}
 			}

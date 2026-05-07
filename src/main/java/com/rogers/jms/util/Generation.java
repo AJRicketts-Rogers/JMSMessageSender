@@ -7,11 +7,14 @@ import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
 
+import com.rogers.jms.util.WebLogicJmsXmlSender.OrderTemplate;
+
 import java.io.StringReader;
 import java.io.StringWriter;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
@@ -22,10 +25,14 @@ import java.util.Properties;
 import java.util.Random;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.ByteArrayInputStream;
+import java.nio.charset.StandardCharsets;
+
 
 import javax.xml.parsers.DocumentBuilderFactory;
 import javax.xml.xpath.XPath;
@@ -44,10 +51,18 @@ public class Generation {
 	
 	private static Properties props = ConfigLoader.load();
     private static final Logger logger = LoggerFactory.getLogger(Generation.class);
+    private static final DocumentBuilderFactory DBF = DocumentBuilderFactory.newInstance();
+    private static final TransformerFactory TF = TransformerFactory.newInstance();
+    private static final Random RAND = new Random();
+    static { DBF.setNamespaceAware(true); }
 
 	private static final List<String> SAM_KEYS;
+	private static final List<String> CBP_VALUES;
+	private static final Path COMBO_INDEX_FILE = Paths.get(props.getProperty("combo.index.file", "combo-index.txt"));
+	
+	private static final AtomicLong COMBO_INDEX = new AtomicLong(0);
 	private static final AtomicInteger SAMKEY_INDEX = new AtomicInteger(0);
-
+	private static final int INDEX_FLUSH_EVERY = 200;
 	
 	static {
 	    String rawValue = props.getProperty("samkey.values", "");
@@ -62,77 +77,105 @@ public class Generation {
 	    }
 	}
 
+	static {
+	    String raw = props.getProperty("cbp.values", "").trim();
+	    if (raw.isEmpty()) {
+	        CBP_VALUES = List.of();
+	    } else {
+	        CBP_VALUES = Arrays.stream(raw.split(","))
+	                .map(String::trim)
+	                .filter(s -> !s.isEmpty())
+	                .collect(Collectors.toList());
+	    }
+	}
+	
+	static {
+        if (SAM_KEYS.isEmpty() || CBP_VALUES.isEmpty()) {
+        	logger.warn("");
+            logger.warn("SamKey or CBP list is EMPTY. CBP and/or Samkey falling back to RANDOM generation.");
+            logger.warn("**Uniqueness across orders is NOT guaranteed.**");
+        }
+	}
+	
+	static {
+	    try {
+	        if (Files.exists(COMBO_INDEX_FILE)) {
+	            long start = Long.parseLong(Files.readString(COMBO_INDEX_FILE).trim());
+	            COMBO_INDEX.set(start);
+	            logger.info("Loaded SamKey/CBP combo index starting at {}\n", start);
+	        }
+	    } catch (Exception e) {
+	        throw new RuntimeException("Failed to load combo index", e);
+	    }
+	}
+
 	
 	public static void main(String[] args) {
-
-//		String orderxml = generateOrder();
-//		WriteStringToFile(orderxml);
-		
-		try {
-			generateOrder("/xml/TT_order.xml");
-//			System.out.println(generateOrder("/xml/TT_order.xml").values());
-			
-		} catch (IOException e) {
-			e.printStackTrace();
-		}
+//		try {
+//        	WebLogicJmsXmlSender.OrderTemplate tpl = WebLogicJmsXmlSender.getTemplateForType("3p");
+//        	Map<String, String> order = generateOrder(tpl.xml, tpl.is3p);
+//        	String formattedXML = prettyFormat(order.values().toArray()[0].toString());
+//			System.out.println(formattedXML);
+//			System.out.println(tpl.is3p);
+//			
+//		} catch (IOException e) {
+//			e.printStackTrace();
+//		}
 	}
-	
-	public static Map<String, String> generateOrder(String filePath) throws IOException {
-		DocumentBuilderFactory builder;
-		Document document = null;
-		
-		long startTime = System.nanoTime();
-		Map<String, String> generatedOrder = new HashMap<String, String>();
-		
-		InputStream xmlStream = WebLogicJmsXmlSender.class.getResourceAsStream(filePath);
-		
-		if (xmlStream == null) {
-		    throw new IOException("TT_order.xml not found on classpath");
-		}
-		
-		try {
-			builder = DocumentBuilderFactory.newInstance();
-			builder.setNamespaceAware(true);
-			document = builder.newDocumentBuilder().parse(xmlStream);
-					
-			XPath xpath = getRoot(document);
-			if (xpath == null) {
-				throw new Exception("Error parsing xml");
-			}
 
-			document = prepareDocument(document, xpath);
-			
-			DomContext ctx = buildContext(document);
+	public static Map<String, String> generateOrder(String xml, boolean is3pOrder) throws IOException {
 
-			replaceNamedValues(ctx, "OrderID");
-			replaceNamedValues(ctx, "SamKey");
-			replaceNamedValues(ctx, "WorkOrderId");
-			replaceNamedValues(ctx, "HHID");
+	    Document document;
 
-			replaceCBP(ctx, document.getDocumentElement());
-			replaceSerialNumbers(ctx);
-			replaceMac(ctx);
+	    long startTime = System.nanoTime();
+	    Map<String, String> generatedOrder = new HashMap<>();
 
-			Map<String, String> repl = generateReplacements(ctx.valueIndex, true, false);
-			applyReplacement(ctx.valueIndex, repl, "OrderItemReferenceNumber", ctx);
+	    try (InputStream xmlStream = new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8))) {
 
-			replaceAffectedProducts(ctx);
-			
-			generatedOrder.put(ctx.referenceNumber, documentToString(document));
-		}			
-		
-		catch (Exception e) {
-			e.printStackTrace();
-		} finally {
+	        document = DBF.newDocumentBuilder().parse(xmlStream);
 
-		    long endTime = System.nanoTime();
-		    long durationMillis = (endTime - startTime) / 1_000_000;
+	        XPath xpath = getRoot(document);
+	        if (xpath == null) {
+	            throw new Exception("Error parsing xml");
+	        }
 
-		    logger.info("Order Generated in {} ms ({} seconds)", durationMillis, durationMillis / 1000.0);
+	        document = prepareDocument(document, xpath);
 
-		}
-		return generatedOrder;
+	        DomContext ctx = buildContext(document);
+
+	        replaceNamedValues(ctx, "OrderID");
+	        replaceNamedValues(ctx, "WorkOrderId");
+	        replaceNamedValues(ctx, "HHID");
+	        replaceNamedValues(ctx, "Associated_OA_ID");
+	        replaceNamedValues(ctx, "CaseId");
+	        replaceNamedValues(ctx, "Registration_Key");
+	        
+	        replaceorderItemReferenceNumbers(ctx);
+	        replacePackageItems(ctx);
+	        replacePhoneNumbers(ctx);
+	        replaceSamKeyAndCBP(ctx, document, is3pOrder);
+	        replaceSerialNumbers(ctx);
+	        replaceMac(ctx);
+	        replaceAffectedProducts(ctx);
+
+	        
+	        generatedOrder.put(ctx.referenceNumber, documentToString(document));
+
+	    } catch (Exception e) {
+	        e.printStackTrace();
+	    } finally {
+	        long endTime = System.nanoTime();
+	        long durationMillis = (endTime - startTime) / 1_000_000;
+	        logger.debug(
+	            "Order Generated in {} ms ({} seconds)",
+	            durationMillis,
+	            durationMillis / 1000.0
+	        );
+	    }
+
+	    return generatedOrder;
 	}
+
 	
 	public static XPath getRoot(Document document) {
 		try {
@@ -174,6 +217,31 @@ public class Generation {
 		return null;
 	}
 	
+	private static Document prepareDocument(Document document, XPath xpath) throws XPathExpressionException {
+
+		NodeList fulfillmentNodeList = (NodeList) xpath.evaluate("//a:FulfillmentOrderSvcRequestFulfillmentOrderInputs", document, XPathConstants.NODESET);
+
+	    if (fulfillmentNodeList.getLength() == 0) {
+	        throw new IllegalStateException("Expected element 'FulfillmentOrderSvcRequestFulfillmentOrderInputs' was not found, check xml.");
+	    }
+	    else if (fulfillmentNodeList.getLength() > 1) {
+	    	throw new IllegalStateException("Found multiple 'FulfillmentOrderSvcRequestFulfillmentOrderInputs' elements, check xml.");
+	    }
+
+	    Node fulfillmentNode = fulfillmentNodeList.item(0);
+	    Element currentRoot = document.getDocumentElement();
+	    
+	    if (fulfillmentNode.isSameNode(currentRoot)) {
+	    	return document;
+	    }
+	    
+	    Node imported = document.importNode(fulfillmentNode, true);
+		document.removeChild(currentRoot);
+		document.appendChild(imported);
+		
+		return document;
+	}
+	
 	private static class ValueIndex {
 	    // Every element whose textContent == key
 	    Map<String, List<Element>> byValue = new HashMap<>();
@@ -182,6 +250,38 @@ public class Generation {
 	        String val = el.getTextContent();
 	        if (val == null || val.isBlank()) return;
 	        byValue.computeIfAbsent(val, k -> new ArrayList<>()).add(el);
+	    }
+	}
+	
+	private static class RbtPair {
+		final String name;
+		final Element value;
+		
+		RbtPair(String name, Element value) {
+			this.name = name;
+			this.value = value;
+		}
+	}
+	
+	private static class DomContext {
+		ValueIndex valueIndex = new ValueIndex();
+		
+		List<Element> affectedProducts = new ArrayList<>();
+		List<Element> customerIds = new ArrayList<>();
+		List<Element> packageItemIds = new ArrayList<>();
+		List<Element> serviceID_TN = new ArrayList<>();		
+		
+		List<RbtPair> rbtPairs = new ArrayList<>();
+		String referenceNumber = null;
+	}
+	
+	private static class Combo {
+	    final String samKey;
+	    final String cbp;
+
+	    Combo(String samKey, String cbp) {
+	        this.samKey = samKey;
+	        this.cbp = cbp;
 	    }
 	}
 	
@@ -196,36 +296,11 @@ public class Generation {
 	    }
 	}
 	
-	private static class RbtPair {
-	    final String name;
-	    final Element value;
-
-	    RbtPair(String name, Element value) {
-	        this.name = name;
-	        this.value = value;
-	    }
-	}
-
-	private static class DomContext {
-	    ValueIndex valueIndex = new ValueIndex();
-
-	    List<Element> orderItems = new ArrayList<>();
-	    List<Element> affectedProducts = new ArrayList<>();
-
-	    List<RbtPair> rbtPairs = new ArrayList<>();
-	    String referenceNumber = null;
-	}
-	
 	private static DomContext buildContext(Document doc) {
 		DomContext ctx = new DomContext();
 
 	    walkDOM(doc.getDocumentElement(), el -> {
 	        String local = el.getLocalName();
-
-	        // orderItems
-	        if ("orderItems".equals(local)) {
-	            ctx.orderItems.add(el);
-	        }
 
 	        // affectedProduct
 	        if ("affectedProduct".equals(local)) {
@@ -257,25 +332,30 @@ public class Generation {
 	                }
 	            }
 	        }
-	    });
+	        
+	        if ("Id".equals(local) && el.getParentNode() != null &&
+	        	    "packageItems".equals(el.getParentNode().getLocalName())) {
+	        	
+	        	    ctx.packageItemIds.add(el);
+        	}
+	    
+		    if ("Id".equals(local) && el.getParentNode() != null
+		            && "customer".equals(el.getParentNode().getLocalName())) {
+		        ctx.customerIds.add(el);
+		    }
+		    
+		    if ("serviceID".equals(local)) {
+		    	if (el.getTextContent().startsWith("289")) {
+		    		ctx.serviceID_TN.add(el);		    		
+		    	}
+		    }
+
+		    });
 
 	    return ctx;
 	}
 	
-	private static Document prepareDocument(Document document, XPath xpath) throws XPathExpressionException {
-
-		Node fulfillmentNode = (Node) xpath.evaluate(
-		    "/ng:OMSOrder/a:FulfillmentOrderSvcRequestFulfillmentOrderInputs", document, XPathConstants.NODE);
-
-		Element oldRoot = document.getDocumentElement();
-		document.removeChild(oldRoot);
-		document.appendChild(fulfillmentNode);
-		
-		return document;
-	}
-
-	
-	private static Map<String, String> generateReplacements(ValueIndex index, boolean needsA, boolean isHHID) {
+	private static Map<String, String> generateReplacements(ValueIndex index, boolean needsA, boolean isHHID, boolean isPhoneNumber) {
 	    Map<String, String> replacements = new HashMap<>();
 
 	    for (String oldVal : index.byValue.keySet()) {
@@ -287,6 +367,11 @@ public class Generation {
 	    	else if (isHHID) {
 	    		String firstLetter = oldVal.substring(0, 1);
 	    		newVal = firstLetter + generateRandomLong(oldVal.length() - 1);
+	    	}
+	    	else if (isPhoneNumber) {
+	    		String areaCode = "289";
+	    		int firstDigit = 2 + new Random().nextInt(8);
+	    		newVal = areaCode + firstDigit + generateRandomLong(oldVal.length() - 4);
 	    	}
 	    	else {
 	    		newVal = Long.toString(generateRandomLong(oldVal.length()));
@@ -306,7 +391,7 @@ public class Generation {
 	        int count = entry.getValue().size();
 
 	        if (label.equals("OrderID")) {
-	        	newVal = newVal + "-" + props.getProperty("testPrefix");
+	        	newVal = props.getProperty("testPrefix") + "-" + newVal;
 	        	ctx.referenceNumber = newVal;
 	        }
 
@@ -328,62 +413,62 @@ public class Generation {
 	    ValueIndex index = new ValueIndex();
 
 	    for (RbtPair pair : ctx.rbtPairs) {
-	        if (name.equals(pair.name)) {
+	    	if (name.equals("HHID")) {
+	    		if ("HHID".equals(pair.name) || "W3ID".equals(pair.name)) {
+	    			index.add(pair.value);	    			
+	    		}
+	    	}
+	    	else if (name.equals(pair.name)){
 	            index.add(pair.value);
-	        }
+	    	}
 	    }
 
 	    Map<String, String> repl = null;
 	    
-
-	    if ("SamKey".equals(name)) {
-	        repl = generateSamKeyReplacement(index);
+	    if ("HHID".equals(name)) {
+	    	repl = generateReplacements(index, false, true, false);
 	    }
-	    else if ("HHID".equals(name)) {
-	    	repl = generateReplacements(index, false, true);
+	    else if ("Associated_OA_ID".equals(name)) {
+	    	repl = generateReplacements(index, true, false, false);
 	    }
 	    else {
-	    	repl = generateReplacements(index, false, false);	    	
+	    	repl = generateReplacements(index, false, false, false);	    	
 	    }
 	    applyReplacement(index, repl, name, ctx);
 	}
 	
-	private static Map<String, String> generateSamKeyReplacement(ValueIndex index) {
+	private static void replacePhoneNumbers(DomContext ctx) {
+	    ValueIndex phoneIndex = new ValueIndex();
 
-	    // Fallback to existing random logic if none configured
-	    if (SAM_KEYS.isEmpty()) {
-	    	logger.debug(System.lineSeparator());
-	    	logger.debug("samkey.values is empty in loadtest.properties, generating a random samkey.");
-	    	logger.debug("Add a comma seperated list of valid samkeys for the current test environment "
-	    			+ "if needed, example: samkey.values = SAMKEY001,SAMKEY002,...\n");
-	        return generateReplacements(index, false, false);
+	    for (RbtPair pair : ctx.rbtPairs) {
+	        if ("Main_TN".equals(pair.name) || "Phone_Number".equals(pair.name)) {
+	            phoneIndex.add(pair.value);
+	        }
+	    }
+	    
+	    if (!ctx.serviceID_TN.isEmpty()) {
+	    	phoneIndex.add(ctx.serviceID_TN.getFirst());	    	
 	    }
 
-	    String originalSamkey = index.byValue.keySet().iterator().next();
+	    Map<String, String> repl = generateReplacements(phoneIndex, false, false, true);
 
-	    // Round robin through configured values
-	    String newSamKey = SAM_KEYS.get(Math.abs(SAMKEY_INDEX.getAndIncrement() % SAM_KEYS.size()));
-
-	    Map<String, String> repl = new HashMap<>();
-	    repl.put(originalSamkey, newSamKey);
-	    return repl;
+	    applyReplacement(phoneIndex, repl, "Phone Number", ctx);
 	}
-
 	
-	private static void replaceCBP(DomContext ctx, Node root) {
-	    ValueIndex index = new ValueIndex();
+	private static void replacePackageItems(DomContext ctx) {
+		ValueIndex index = new ValueIndex();
+		for (Element el : ctx.packageItemIds) {
+			index.add(el);
+		}
+		
+	    Map<String, String> replacements = generateReplacements(index, false, false, false);
 
-	    walkDOM(root, el -> {
-	        if ("Id".equals(el.getLocalName()) &&
-	            el.getParentNode() != null &&
-	            "customer".equals(el.getParentNode().getLocalName())) {
-
-	            index.add(el);
-	        }
-	    });
-
-	    Map<String, String> repl = generateReplacements(index, false, false);
-	    applyReplacement(index, repl, "CBP", ctx);
+	    applyReplacement(index, replacements, "PackageItem ID", ctx);
+	}
+	
+	private static void replaceorderItemReferenceNumbers(DomContext ctx) {
+        Map<String, String> repl = generateReplacements(ctx.valueIndex, true, false, false);
+        applyReplacement(ctx.valueIndex, repl, "orderItemReferenceNumber", ctx);
 	}
 	
 	private static void replaceSerialNumbers(DomContext ctx) {
@@ -452,17 +537,15 @@ public class Generation {
 	                        apidIndex.add(rbtPair.value);
 	                    }
 	                }
-	                else {
-	                	logger.error("Could not extract name value pair from charactersiticValues element");
-	                }
 	            }
 	        }
 	    }
 
-	    Map<String, String> replacements = generateReplacements(apidIndex, false, false);
+	    Map<String, String> replacements = generateReplacements(apidIndex, false, false, false);
 
 	    applyReplacement(apidIndex, replacements, "APID", ctx);
 	}
+	
 	
 	private static RbtPair extractNameValue(Element characteristicValues) {
 	    Element name = null, value = null;
@@ -492,7 +575,7 @@ public class Generation {
 	    int count = 0;
 	    for (RbtPair pair : ctx.rbtPairs) {
 	        String name = pair.name;
-	        if (name.contains("MAC_Address") || name.contains("Mac_Address")) {
+	        if (name.toLowerCase().contains("mac")) {
 	            String newMac = generateRandomString(12);
 	            logger.debug("New Mac Address: {}", newMac);
 	            pair.value.setTextContent(newMac);
@@ -503,10 +586,38 @@ public class Generation {
 	    logger.debug("\tNumber of values changed: {}\n", count);
 	}
 	
+	private static void replaceSamKeyAndCBP(DomContext ctx, Document doc, boolean is3pOrder) {
+    	Combo combo = nextCombo(is3pOrder);
+
+	    // ---- SamKey (RBT) ----
+	    ValueIndex samIndex = new ValueIndex();
+	    for (RbtPair pair : ctx.rbtPairs) {
+	        if ("SamKey".equals(pair.name)) {
+	            samIndex.add(pair.value);
+	        }
+	    }
+
+	    if (!samIndex.byValue.isEmpty()) {
+	        applyReplacement(samIndex, Map.of(samIndex.byValue.keySet().iterator().next(), combo.samKey), "SamKey", ctx);
+	    }
+
+	    // ---- CBP (customer/Id) ----
+	    ValueIndex cbpIndex = new ValueIndex();
+	    for (Element el : ctx.customerIds) {
+	        cbpIndex.add(el);
+	    }
+
+
+	    if (!cbpIndex.byValue.isEmpty()) {
+	    	applyReplacement(cbpIndex, Map.of(cbpIndex.byValue.keySet().iterator().next(), combo.cbp), "CBP", ctx);	    		
+	    }
+	}
+	
     public static long generateRandomLong(int length) {
-        if (length < 1 || length > 19) {
-            throw new IllegalArgumentException("Length must be between 1 and 19 for long type.");
-        }
+//        if (length < 1 || length > 19) {
+//        	logger.error("Length of value was {}, changing to 12", length);
+//        	length = 12;
+//        }
         long min = (long) Math.pow(10, length - 1);
         long max = (long) Math.pow(10, length);
 
@@ -516,31 +627,81 @@ public class Generation {
     
     public static String generateRandomString(int length) {
     	String CHARACTERS = "ABCDEF0123456789";
-    	Random rnd = new Random();
     	StringBuilder sb = new StringBuilder(length);
     	
     	for (int i = 0; i < length; i++) {
-    		sb.append(CHARACTERS.charAt(rnd.nextInt(CHARACTERS.length())));
+    		sb.append(CHARACTERS.charAt(RAND.nextInt(CHARACTERS.length())));
     	}
     	return sb.toString();
     }
-	
-	private static List<Node> convertNodeListToList(NodeList nodeList) {
-		// Convert NodeList to List<Node>
-		List<Node> list = new ArrayList<>(nodeList.getLength());
-		
-		for (int i = 0; i < nodeList.getLength(); i++) {
-			list.add(nodeList.item(i));
-		}
-		
-		return list;
-	}
-	
+    
+    private static Combo nextCombo(boolean is3pOrder) {
+
+        //NON-3P orders: do NOT consume combo index
+        if (!is3pOrder) {
+
+            String samKey;
+            String cbp;
+
+            // SamKey: list if available, else random
+            if (!SAM_KEYS.isEmpty()) {
+                samKey = SAM_KEYS.get(Math.abs(SAMKEY_INDEX.getAndIncrement() % SAM_KEYS.size()));
+            } else {
+                samKey = Long.toString(generateRandomLong(15));
+            }
+
+            // CBP: ALWAYS random for non-3P
+            cbp = Long.toString(generateRandomLong(9));
+
+            return new Combo(samKey, cbp);
+        }
+
+        // 3P orders: enforce SamKey + CBP pairing
+        if (SAM_KEYS.isEmpty() || CBP_VALUES.isEmpty()) {
+            return new Combo(Long.toString(generateRandomLong(12)), Long.toString(generateRandomLong(9)));
+        }
+
+        long index = COMBO_INDEX.getAndIncrement();
+        long max = (long) SAM_KEYS.size() * CBP_VALUES.size();
+
+        if (index >= max) {
+            throw new IllegalStateException("SamKey/CBP combinations exhausted, all " + max + " combinations used.");
+        }
+
+        int cbpCount = CBP_VALUES.size();
+        int samIdx = (int) (index / cbpCount);
+        int cbpIdx = (int) (index % cbpCount);
+
+        // Occasionally write index to file
+        if (index % INDEX_FLUSH_EVERY == 0) {
+            try {
+                Files.writeString(COMBO_INDEX_FILE, Long.toString(index),StandardOpenOption.CREATE,StandardOpenOption.TRUNCATE_EXISTING);
+            } catch (IOException e) {
+                throw new RuntimeException("Failed to persist combo index", e);
+            }
+        }
+
+        return new Combo(SAM_KEYS.get(samIdx), CBP_VALUES.get(cbpIdx));
+    }
+    
+    public static long remainingSamKeyCbpCapacity() {
+
+        // If either list is empty, we are falling back to generating random values
+        if (SAM_KEYS.isEmpty() || CBP_VALUES.isEmpty()) {
+            return Long.MAX_VALUE; // effectively unlimited
+        }
+
+        long total = (long) SAM_KEYS.size() * CBP_VALUES.size();
+        long used = COMBO_INDEX.get();
+
+        long remaining = total - used;
+        return Math.max(remaining, 0);
+    }
+    
 	public static String documentToString(Document doc) {
 	    try {
 	        StringWriter sw = new StringWriter();
-	        TransformerFactory tf = TransformerFactory.newInstance();
-	        Transformer transformer = tf.newTransformer();
+	        Transformer transformer = TF.newTransformer();
 	        transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "yes");
 	        transformer.setOutputProperty(OutputKeys.METHOD, "xml");
 	        transformer.setOutputProperty(OutputKeys.INDENT, "yes");
@@ -592,7 +753,8 @@ public class Generation {
 	
 	public static String prettyFormat(String input, int indent) {
 	    try {
-	        Source xmlInput = new StreamSource(new StringReader(input));
+	    	String cleanInput = input.replaceAll(">\\s+<", "><").trim();
+	        Source xmlInput = new StreamSource(new StringReader(cleanInput));
 	        StringWriter stringWriter = new StringWriter();
 	        StreamResult xmlOutput = new StreamResult(stringWriter);
 	        TransformerFactory transformerFactory = TransformerFactory.newInstance();
@@ -601,6 +763,7 @@ public class Generation {
 	        transformerFactory.setAttribute(XMLConstants.ACCESS_EXTERNAL_STYLESHEET, "");
 	        Transformer transformer = transformerFactory.newTransformer(); 
 	        transformer.setOutputProperty(OutputKeys.INDENT, "yes");
+	        transformer.setOutputProperty(OutputKeys.OMIT_XML_DECLARATION, "yes");
 	        transformer.transform(xmlInput, xmlOutput);
 	        return xmlOutput.getWriter().toString();
 	    } catch (Exception e) {
@@ -610,5 +773,6 @@ public class Generation {
 
 	public static String prettyFormat(String input) {
 	    return prettyFormat(input, 2);
-	}	
+	}
+
 }
