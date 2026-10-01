@@ -39,7 +39,7 @@ public class WebLogicJmsXmlSender {
 //  private static final String WL_PROVIDER_URL = "t3://osmdev1-z1.ngpp.mgmt.vf.rogers.com:7001,osmdev1-z2.ngpp.mgmt.vf.rogers.com:7001"; // e.g., t3://wls-host.example.com:7001 (use t3s:// for SSL)
 //	private static final String WL_PROVIDER_URL = "t3://osmqa1-1.ngpp.mgmt.vf.rogers.com:7001,osmqa1-2.ngpp.mgmt.vf.rogers.com:7001"; // e.g., t3://wls-host.example.com:7001 (use t3s:// for SSL)
 //	private static final String WL_PROVIDER_URL = "t3://vlrenbptosmwl01.rci.rogers.ca:7001,vlrenbptosmwl01.rci.rogers.ca:7003,vlrenbptosmwl02.rci.rogers.ca:7001,vlrenbptosmwl02.rci.rogers.ca:7003,vlrenbptosmwl03.rci.rogers.ca:7001,vlrenbptosmwl03.rci.rogers.ca:7003,vlrenbptosmwl04.rci.rogers.ca:7001,vlrenbptosmwl04.rci.rogers.ca:7003,vlrenbptosmwl05.rci.rogers.ca:7001,vlrenbptosmwl05.rci.rogers.ca:7003"; 
-	private static final String WL_PROVIDER_URL = props.getProperty("providerURL");
+	private static final String WL_PROVIDER_URL = props.getProperty("providerURL").replaceAll("\\s+", "");
     
     private static final String WL_INITIAL_CONTEXT_FACTORY = "weblogic.jndi.WLInitialContextFactory";
     private static final String WL_USERNAME = props.getProperty("username");
@@ -47,6 +47,7 @@ public class WebLogicJmsXmlSender {
 
    // JNDI names
     private static final String CF_JNDI_NAME = "mslv/oms/oms1/internal/jms/ConnectionFactory";     // e.g.,jms/MyCustomConnectionFactory
+    private static final String CF_JNDI_NAME_OLD = "oracle/communications/ordermanagement/osm/ExternalClientConnectionFactory";     // e.g.,jms/MyCustomConnectionFactory
     public static final String QUEUE_JNDI_NAME = "jms/OMS.NGPP.REQ.Q";
 
     // Optional: SSL Trust Store if using t3s (leave empty if not needed)
@@ -178,19 +179,15 @@ public class WebLogicJmsXmlSender {
     }
     
     public static void SendSOMRMessages(JmsResources jmsResources, int total_messages, int batch_size, int thread_count, 
-    		int max_msgs_per_second, int batchWaitTimeMs, String orderType) {
-    	final Semaphore rate_limiter = new Semaphore(0, true);
+    		int sendSleepMs, int batchWaitTimeMs, String orderType) {
     	try {
-            
             ExecutorService senderPool = Executors.newFixedThreadPool(thread_count);
-
-            ScheduledExecutorService rateLimiterScheduler = startRateLimiterRefill(rate_limiter, max_msgs_per_second);
 
             int remaining = total_messages;
             List<String> referenceNumbers = new ArrayList<String>();
 
             while (remaining > 0) {
-                int currentBatchSize = Math.min(batch_size, remaining);
+            	int currentBatchSize = (batch_size > 0) ? Math.min(batch_size, remaining) : remaining;
                 List<String> batch = null;
                 
                 long available = Generation.remainingSamKeyCbpCapacity();
@@ -216,12 +213,14 @@ public class WebLogicJmsXmlSender {
                 }
 
                 for (String xml : batch) {
-                	rate_limiter.acquire();
                     senderPool.submit(() -> sendOneMessage(jmsResources, xml, 5, null));
+                    remaining--;
+                    
+                    if (sendSleepMs > 0 && remaining > 0) {
+                        Thread.sleep(sendSleepMs);
+                    }
                 }
                 
-                remaining -= currentBatchSize;
-
                 if (batchWaitTimeMs > 0 && remaining > 0) {
                     try {
                         Thread.sleep(batchWaitTimeMs);
@@ -236,8 +235,6 @@ public class WebLogicJmsXmlSender {
             // Shutdown cleanly
             senderPool.shutdown();
             senderPool.awaitTermination(30, TimeUnit.MINUTES);
-
-            rateLimiterScheduler.shutdown();
 
             logger.info(orderType.toUpperCase() + " Reference Numbers = {}", referenceNumbers);
             logger.info("All "+ orderType.toUpperCase() + " messages sent" +  System.lineSeparator());
@@ -287,7 +284,6 @@ public class WebLogicJmsXmlSender {
         for (int i = 0; i < batchSize; i++) {
         	OrderTemplate tpl = getTemplateForType(orderType);
         	Map<String, String> order = Generation.generateOrder(tpl.xml, tpl.is3p);
-
         	
         	if (!order.isEmpty()) {
         		Map.Entry<String, String> entry = order.entrySet().iterator().next();
@@ -329,7 +325,7 @@ public class WebLogicJmsXmlSender {
         OrderTemplate(String xml, String type) {
             this.xml = xml;
             this.type = type;
-            this.is3p = "3p".equals(type);
+            this.is3p = "3p".equals(type) || "3p_Placeholder".equals(type);
         }
     }
     

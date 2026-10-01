@@ -6,6 +6,7 @@ import org.w3c.dom.Document;
 import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 import org.w3c.dom.NodeList;
+import org.xml.sax.SAXException;
 
 import com.rogers.jms.util.WebLogicJmsXmlSender.OrderTemplate;
 
@@ -35,6 +36,7 @@ import java.nio.charset.StandardCharsets;
 
 
 import javax.xml.parsers.DocumentBuilderFactory;
+import javax.xml.parsers.ParserConfigurationException;
 import javax.xml.xpath.XPath;
 import javax.xml.xpath.XPathConstants;
 import javax.xml.xpath.XPathExpressionException;
@@ -111,18 +113,21 @@ public class Generation {
 
 	
 	public static void main(String[] args) {
-//		try {
-//        	WebLogicJmsXmlSender.OrderTemplate tpl = WebLogicJmsXmlSender.getTemplateForType("3p");
-//        	Map<String, String> order = generateOrder(tpl.xml, tpl.is3p);
-//        	String formattedXML = prettyFormat(order.values().toArray()[0].toString());
-//			System.out.println(formattedXML);
-//			System.out.println(tpl.is3p);
-//			
-//		} catch (IOException e) {
-//			e.printStackTrace();
-//		}
+		try {
+        	WebLogicJmsXmlSender.OrderTemplate tpl = WebLogicJmsXmlSender.getTemplateForType("3p_Placeholder");
+        	Map<String, String> order = generateOrder(tpl.xml, tpl.is3p);
+//        	Map<String, String> order = generateOrderPlaceholder(tpl.xml);
+        	String formattedXML = prettyFormat(order.values().toArray()[0].toString());
+			if (formattedXML != null) {
+				System.out.println(formattedXML);
+				System.out.println(tpl.is3p);				
+			}
+			
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
 	}
-
+	
 	public static Map<String, String> generateOrder(String xml, boolean is3pOrder) throws IOException {
 
 	    Document document;
@@ -362,19 +367,19 @@ public class Generation {
 	        // Preserve format: digits + 'A'
 	    	String newVal = "";
 	    	if (needsA) {
-	    		newVal = generateRandomLong(oldVal.length() - 1) + "A";	    		
+	    		newVal = generateRandomDigitString(oldVal.length() - 1) + "A";	    		
 	    	}
 	    	else if (isHHID) {
 	    		String firstLetter = oldVal.substring(0, 1);
-	    		newVal = firstLetter + generateRandomLong(oldVal.length() - 1);
+	    		newVal = firstLetter + generateRandomDigitString(oldVal.length() - 1);
 	    	}
 	    	else if (isPhoneNumber) {
 	    		String areaCode = "289";
 	    		int firstDigit = 2 + new Random().nextInt(8);
-	    		newVal = areaCode + firstDigit + generateRandomLong(oldVal.length() - 4);
+	    		newVal = areaCode + firstDigit + generateRandomDigitString(oldVal.length() - 4);
 	    	}
 	    	else {
-	    		newVal = Long.toString(generateRandomLong(oldVal.length()));
+	    		newVal = generateRandomDigitString(oldVal.length());
 	    	}
 	        replacements.put(oldVal, newVal);
 	    }
@@ -489,7 +494,7 @@ public class Generation {
 	        	logger.debug("Old Serial_Number: {}", oldVal);
 	        	String newVal = null;
 	        	if (oldVal.matches("\\d++")) {
-	        		newVal = String.valueOf(generateRandomLong(oldVal.length()));
+	        		newVal = generateRandomDigitString(oldVal.length());
 	        	}
 	        	else {
 	        		newVal = generateRandomString(oldVal.length());
@@ -625,6 +630,20 @@ public class Generation {
         return ThreadLocalRandom.current().nextLong(min, max);
     }
     
+    public static String generateRandomDigitString(int length) {
+        StringBuilder sb = new StringBuilder(length);
+
+        // First digit: 2–9
+        sb.append(2 + ThreadLocalRandom.current().nextInt(8));
+
+        // Remaining digits: 0–9
+        for (int i = 1; i < length; i++) {
+            sb.append(ThreadLocalRandom.current().nextInt(10));
+        }
+
+        return sb.toString();
+    }
+    
     public static String generateRandomString(int length) {
     	String CHARACTERS = "ABCDEF0123456789";
     	StringBuilder sb = new StringBuilder(length);
@@ -647,18 +666,18 @@ public class Generation {
             if (!SAM_KEYS.isEmpty()) {
                 samKey = SAM_KEYS.get(Math.abs(SAMKEY_INDEX.getAndIncrement() % SAM_KEYS.size()));
             } else {
-                samKey = Long.toString(generateRandomLong(15));
+                samKey = generateRandomDigitString(13);
             }
 
             // CBP: ALWAYS random for non-3P
-            cbp = Long.toString(generateRandomLong(9));
+            cbp = generateRandomDigitString(9);
 
             return new Combo(samKey, cbp);
         }
 
         // 3P orders: enforce SamKey + CBP pairing
         if (SAM_KEYS.isEmpty() || CBP_VALUES.isEmpty()) {
-            return new Combo(Long.toString(generateRandomLong(12)), Long.toString(generateRandomLong(9)));
+            return new Combo(generateRandomDigitString(13), generateRandomDigitString(9));
         }
 
         long index = COMBO_INDEX.getAndIncrement();
@@ -773,6 +792,44 @@ public class Generation {
 
 	public static String prettyFormat(String input) {
 	    return prettyFormat(input, 2);
+	}
+	
+	public static Map<String, String> generateOrderPlaceholder(String xml) {
+		String prepared_xml = null;
+		Map<String, String> generatedOrder = new HashMap<>();
+		try (InputStream is = new ByteArrayInputStream(xml.getBytes(StandardCharsets.UTF_8))) {
+    		Document document;
+    		document = DBF.newDocumentBuilder().parse(is);
+
+            XPath xpath = getRoot(document);
+            if (xpath == null) {
+                throw new Exception("Error parsing xml");
+            }
+			document = prepareDocument(document, xpath);
+			prepared_xml = documentToString(document);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		
+		if (prepared_xml == null || prepared_xml.isEmpty()) {
+	        return generatedOrder;
+	    }
+
+	    final String four_digit_token = "${#Project#4DigitCounter}";
+	    final String seven_digit_token = "${#Project#7DigitCounter}";
+	    if (!prepared_xml.contains(four_digit_token) || !prepared_xml.contains(seven_digit_token)) {
+	    	return generatedOrder;
+	    }
+
+	    String four_digit_replacement = generateRandomDigitString(4);
+	    String seven_digit_replacement = generateRandomDigitString(7);
+	    prepared_xml = prepared_xml.replace(four_digit_token, four_digit_replacement);
+	    prepared_xml = prepared_xml.replace(seven_digit_token, seven_digit_replacement);
+	    String reference_number = "753640" + four_digit_replacement; 
+	    
+	    generatedOrder.put(reference_number, prepared_xml);
+	    
+	    return generatedOrder;
 	}
 
 }

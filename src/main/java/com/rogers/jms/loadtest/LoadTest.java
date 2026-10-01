@@ -1,6 +1,7 @@
 package com.rogers.jms.loadtest;
 
 import java.util.Date;
+import java.util.List;
 import java.util.Properties;
 
 import org.slf4j.Logger;
@@ -31,25 +32,19 @@ public class LoadTest {
 
 		// SOMR 1P ORDERS
 		int TotalMessages1p = Integer.parseInt(props.getProperty("somr.1p.total_messages"));
-		int BatchSize1p = Integer.parseInt(props.getProperty("somr.1p.batch_size"));
-		int BatchWaitTimeMs1p = Integer.parseInt(props.getProperty("somr.1p.batch_wait_time_ms"));
 		int ThreadCount1p = Integer.parseInt(props.getProperty("somr.1p.thread_count"));
-		int MaxMsgsPerSecond1p = Integer.parseInt(props.getProperty("somr.1p.max_msgs_per_second"));
+		int sleepIntervalMillis1p = Integer.parseInt(props.getProperty("somr.1p.sleep_interval_millis"));
 
 		// SOMR 2P ORDERS
 		int TotalMessages2p = Integer.parseInt(props.getProperty("somr.2p.total_messages"));
-		int BatchSize2p = Integer.parseInt(props.getProperty("somr.2p.batch_size"));
-		int BatchWaitTimeMs2p = Integer.parseInt(props.getProperty("somr.2p.batch_wait_time_ms"));
 		int ThreadCount2p = Integer.parseInt(props.getProperty("somr.2p.thread_count"));
-		int MaxMsgsPerSecond2p = Integer.parseInt(props.getProperty("somr.2p.max_msgs_per_second"));
+		int sleepIntervalMillis2p = Integer.parseInt(props.getProperty("somr.2p.sleep_interval_millis"));
 
 		// SOMR 3P ORDERS
-
 		int TotalMessages3p = Integer.parseInt(props.getProperty("somr.3p.total_messages"));
-		int BatchSize3p = Integer.parseInt(props.getProperty("somr.3p.batch_size"));
-		int BatchWaitTimeMs3p = Integer.parseInt(props.getProperty("somr.3p.batch_wait_time_ms"));
 		int ThreadCount3p = Integer.parseInt(props.getProperty("somr.3p.thread_count"));
-		int MaxMsgsPerSecond3p = Integer.parseInt(props.getProperty("somr.3p.max_msgs_per_second"));
+		int sleepIntervalMillis3p = Integer.parseInt(props.getProperty("somr.3p.sleep_interval_millis"));
+
 		
         String username = props.getProperty("username");
         String password = props.getProperty("password");
@@ -132,18 +127,22 @@ public class LoadTest {
 			final MessageSender newSender = new MessageSender(username, password);
 		    newSender.init(MessageSender.OMS_REQ_QUEUE);
 		    
+			List<Integer> batchProps = getBatchProperties(props, "1p");
+			int BatchSize1p = batchProps.getFirst();
+			int BatchWaitTimeMs1p = batchProps.getLast();
+		    
             logger.debug("Starting 1P SOMR Message Send:");
             logger.debug("       Total messages: {}", TotalMessages1p);
             logger.debug("       Batch size:     {}", BatchSize1p);
             logger.debug("       Batch wait(ms): {}", BatchWaitTimeMs1p);
             logger.debug("       Threads:        {}", ThreadCount1p);
-            logger.debug("       Max msg/sec:    {}\n", MaxMsgsPerSecond1p);
+            logger.debug("       Sleep Interval: {} Milliseconds\n", sleepIntervalMillis1p);
 
 		    t5 = new Thread(new Runnable() {
 		        @Override
 		        public void run() {		        	
 		            WebLogicJmsXmlSender.SendSOMRMessages(newSender.getJmsResources(), TotalMessages1p, BatchSize1p, ThreadCount1p, 
-		            		MaxMsgsPerSecond1p, BatchWaitTimeMs1p, "1p");
+		            		sleepIntervalMillis1p, BatchWaitTimeMs1p, "1p");
 		        }
 		    });
 		}	
@@ -154,19 +153,23 @@ public class LoadTest {
 		if (TotalMessages2p > 0) {
 			final MessageSender newSender = new MessageSender(username, password);
 			newSender.init(MessageSender.OMS_REQ_QUEUE);
+			
+			List<Integer> batchProps = getBatchProperties(props, "2p");
+			int BatchSize2p = batchProps.getFirst();
+			int BatchWaitTimeMs2p = batchProps.getLast();
 
             logger.debug("Starting 2P SOMR Message Send:");
             logger.debug("       Total messages: {}", TotalMessages2p);
             logger.debug("       Batch size:     {}", BatchSize2p);
             logger.debug("       Batch wait(ms): {}", BatchWaitTimeMs2p);
             logger.debug("       Threads:        {}", ThreadCount2p);
-            logger.debug("       Max msg/sec:    {}\n", MaxMsgsPerSecond2p);
+            logger.debug("       Sleep Interval: {} Milliseconds\n", sleepIntervalMillis2p);
 			
 			t6 = new Thread(new Runnable() {
 				@Override
 				public void run() {
 					WebLogicJmsXmlSender.SendSOMRMessages(newSender.getJmsResources(), TotalMessages2p, BatchSize2p, ThreadCount2p, 
-							MaxMsgsPerSecond2p, BatchWaitTimeMs2p, "2p");
+							sleepIntervalMillis2p, BatchWaitTimeMs2p, "2p");
 				}
 			});
 		}	
@@ -178,18 +181,22 @@ public class LoadTest {
 			final MessageSender newSender = new MessageSender(username, password);
 			newSender.init(MessageSender.OMS_REQ_QUEUE);
 			
-            logger.info("Starting 3P SOMR Message Send:");
+			List<Integer> batchProps = getBatchProperties(props, "3p");
+			int BatchSize3p = batchProps.getFirst();
+			int BatchWaitTimeMs3p = batchProps.getLast();
+			
+            logger.debug("Starting 3P SOMR Message Send:");
             logger.debug("       Total messages: {}", TotalMessages3p);
             logger.debug("       Batch size:     {}", BatchSize3p);
             logger.debug("       Batch wait(ms): {}", BatchWaitTimeMs3p);
             logger.debug("       Threads:        {}", ThreadCount3p);
-            logger.debug("       Max msg/sec:    {}\n", MaxMsgsPerSecond3p);
+            logger.debug("       Sleep Interval: {} Milliseconds\n", sleepIntervalMillis3p);
 			
 			t7 = new Thread(new Runnable() {
 				@Override
 				public void run() {
 					WebLogicJmsXmlSender.SendSOMRMessages(newSender.getJmsResources(), TotalMessages3p, BatchSize3p, ThreadCount3p, 
-							MaxMsgsPerSecond3p, BatchWaitTimeMs3p, "3p");
+							sleepIntervalMillis3p, BatchWaitTimeMs3p, "3p");
 				}
 			});
 		}	
@@ -221,6 +228,18 @@ public class LoadTest {
 		logger.info("Start time : " + startDate);
 		logger.info("End time : " + new Date());		
 		logger.info("All messages sent in : " + seconds + " seconds" + System.lineSeparator() + System.lineSeparator());		
+	}
+	
+	public static List<Integer> getBatchProperties(Properties props, String orderType) {
+		String batch_size = props.getProperty("somr." + orderType + ".batch_size");
+		String batch_wait_time_ms = props.getProperty("somr." + orderType + ".batch_wait_time_ms");
+		
+		if (batch_size == null || batch_wait_time_ms == null) {
+			return List.of(1, 0);
+		}
+		else {
+			return List.of(Integer.parseInt(batch_size), Integer.parseInt(batch_wait_time_ms));
+		}
 	}
 
 }
